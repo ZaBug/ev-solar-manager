@@ -1,0 +1,50 @@
+{
+  "integration_icon": "mdi:ev-station",
+  "entity": {
+    "sensor": {
+      "solar_charging_current": {
+        "default": "mdi:current-ac"
+      },
+      "solar_available_power": {
+        "default": "mdi:solar-power"
+      },
+      "solar_export_power": {
+        "default": "mdi:transmission-tower-export"
+      }
+    },
+    "number": {
+      "max_charging_current": {
+        "default": "mdi:current-ac"
+      },
+      "min_charging_current": {
+        "default": "mdi:current-ac"
+      },
+      "manual_current_override": {
+        "default": "mdi:tune-vertical"
+      },
+      "safety_margin_w": {
+        "default": "mdi:shield-sun"
+      }
+    },
+    "switch": {
+      "solar_charging": {
+        "default": "mdi:solar-power",
+        "state": {
+          "off": "mdi:solar-power-variant-outline"
+        }
+      },
+      "manual_override": {
+        "default": "mdi:tune",
+        "state": {
+          "off": "mdi:tune-vertical-variant"
+        }
+      }
+    },
+    "button": {
+      "recalculate": {
+        "default": "mdi:refresh-circle"
+      }
+    }
+  }
+}
+
