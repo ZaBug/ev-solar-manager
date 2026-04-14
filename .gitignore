@@ -2,3 +2,9 @@
 *.pyc
 *.pyo
 .DS_Store
+
+# JetBrains IDE files
+.idea/
+*.iml
+
+
