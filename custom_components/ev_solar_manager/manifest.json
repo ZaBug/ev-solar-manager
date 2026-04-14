@@ -1,0 +1,11 @@
+{
+  "domain": "ev_solar_manager",
+  "name": "EV Solar Manager",
+  "version": "1.0.0",
+  "documentation": "https://github.com/ZaBug/ev-solar-manager",
+  "issue_tracker": "https://github.com/ZaBug/ev-solar-manager/issues",
+  "codeowners": ["@ZaBug"],
+  "iot_class": "calculated",
+  "config_flow": true,
+  "requirements": []
+}
