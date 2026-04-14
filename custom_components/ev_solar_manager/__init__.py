@@ -45,6 +45,7 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.helpers.event import async_track_time_interval, async_track_state_change_event
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers import discovery
+from homeassistant.helpers import device_registry as dr
 
 from .const import (
     DOMAIN,
@@ -154,6 +155,19 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     await controller.async_start()
     _LOGGER.info("EV Solar Manager: controller started")
+
+    # Register the device explicitly in the device registry so all entities
+    # are grouped under a single device entry in Settings → Devices & Services.
+    device_registry = dr.async_get(hass)
+    device_registry.async_get_or_create(
+        config_entry_id=None,
+        identifiers={(DOMAIN, "ev_solar_manager")},
+        name="EV Solar Manager",
+        manufacturer="ZaBug",
+        model="Solar EV Charger Controller",
+        sw_version=hass.data[DOMAIN]["config"].get("version", "1.0.1"),
+        configuration_url="https://github.com/ZaBug/ev-solar-manager",
+    )
 
     async def _handle_stop(_event):
         await controller.async_stop()

@@ -8,14 +8,12 @@ from .const import DOMAIN, INTEGRATION_VERSION
 
 
 def ev_solar_device_info() -> DeviceInfo:
-    """Return the shared DeviceInfo for all EV Solar Manager entities."""
+    """Return the shared DeviceInfo used by all EV Solar Manager entities."""
     return DeviceInfo(
         identifiers={(DOMAIN, "ev_solar_manager")},
         name="EV Solar Manager",
         manufacturer="ZaBug",
         model="Solar EV Charger Controller",
         sw_version=INTEGRATION_VERSION,
-        # mdi icon shown in the device page
         configuration_url="https://github.com/ZaBug/ev-solar-manager",
     )
-
