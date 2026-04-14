@@ -1,4 +1,5 @@
 ﻿{
+  "title": "EV Solar Manager",
   "config": {
     "abort": {
       "yaml_only": "EV Solar Manager is configured via configuration.yaml.",
@@ -6,4 +7,3 @@
     }
   }
 }
-

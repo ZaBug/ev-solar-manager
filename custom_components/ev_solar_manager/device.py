@@ -16,4 +16,5 @@ def ev_solar_device_info() -> DeviceInfo:
         model="Solar EV Charger Controller",
         sw_version=INTEGRATION_VERSION,
         configuration_url="https://github.com/ZaBug/ev-solar-manager",
+        suggested_area="Garage",
     )
