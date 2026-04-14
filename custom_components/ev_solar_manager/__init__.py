@@ -45,7 +45,7 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.helpers.event import async_track_time_interval, async_track_state_change_event
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers import discovery
-from homeassistant.helpers import device_registry as dr
+from homeassistant.config_entries import ConfigEntry
 
 from .const import (
     DOMAIN,
@@ -78,12 +78,26 @@ PLATFORMS = ["switch", "number", "sensor", "button"]
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up EV Solar Manager from YAML configuration."""
-
+    """Handle YAML configuration – trigger config flow import."""
     if DOMAIN not in config:
         return True
 
-    cfg = config.get(DOMAIN) or {}
+    # If no config entry exists yet, trigger the import flow.
+    # This creates a config entry which allows proper device grouping in HA.
+    if not hass.config_entries.async_entries(DOMAIN):
+        hass.async_create_task(
+            hass.config_entries.flow.async_init(
+                DOMAIN,
+                context={"source": "import"},
+                data=config[DOMAIN],
+            )
+        )
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up EV Solar Manager from a config entry (created via YAML import)."""
+    cfg = dict(entry.data)
 
     power_entity = cfg.get(CONF_POWER_ENTITY)
     voltage_entity = cfg.get(CONF_VOLTAGE_ENTITY)
@@ -137,50 +151,31 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         charging_state=charging_state,
     )
     hass.data[DOMAIN]["controller"] = controller
-    hass.data[DOMAIN]["config"] = {
-        CONF_POWER_ENTITY: power_entity,
-        CONF_VOLTAGE_ENTITY: voltage_entity,
-        CONF_TARGET_NUMBER: target_number,
-        CONF_MIN_CURRENT: min_current,
-        CONF_MAX_CURRENT: max_current,
-        CONF_UPDATE_INTERVAL: update_interval,
-        CONF_MIN_DELTA_AMP: min_delta_amp,
-        CONF_EXPORT_IS_NEGATIVE: export_is_negative,
-        CONF_PHASES: phases,
-        CONF_CHARGER_POWER_ENTITY: charger_power_entity,
-        CONF_SAFETY_MARGIN_W: safety_margin_w,
-        CONF_CHARGER_STATUS_ENTITY: charger_status_entity,
-        CONF_CHARGING_STATE: charging_state,
-    }
 
     await controller.async_start()
     _LOGGER.info("EV Solar Manager: controller started")
-
-    # Register the device explicitly in the device registry so all entities
-    # are grouped under a single device entry in Settings → Devices & Services.
-    device_registry = dr.async_get(hass)
-    device_registry.async_get_or_create(
-        config_entry_id=None,
-        identifiers={(DOMAIN, "ev_solar_manager")},
-        name="EV Solar Manager",
-        manufacturer="ZaBug",
-        model="Solar EV Charger Controller",
-        sw_version=hass.data[DOMAIN]["config"].get("version", "1.0.1"),
-        configuration_url="https://github.com/ZaBug/ev-solar-manager",
-    )
 
     async def _handle_stop(_event):
         await controller.async_stop()
 
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _handle_stop)
 
-    for platform in PLATFORMS:
-        _LOGGER.debug("EV Solar Manager: loading platform %s", platform)
-        hass.async_create_task(
-            discovery.async_load_platform(hass, platform, DOMAIN, {}, config)
-        )
+    # Load platforms – they will pick up device_info from the config entry
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a config entry."""
+    controller = hass.data.get(DOMAIN, {}).get("controller")
+    if controller:
+        await controller.async_stop()
+
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unload_ok:
+        hass.data.pop(DOMAIN, None)
+    return unload_ok
 
 
 class EVSolarController:

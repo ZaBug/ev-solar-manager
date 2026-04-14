@@ -1,0 +1,9 @@
+﻿{
+  "config": {
+    "abort": {
+      "yaml_only": "EV Solar Manager is configured via configuration.yaml.",
+      "already_configured": "EV Solar Manager is already configured."
+    }
+  }
+}
+

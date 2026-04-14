@@ -7,23 +7,25 @@ The value is pushed immediately after every recalculation (no polling).
 from __future__ import annotations
 
 from homeassistant.components.sensor import SensorEntity
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .device import ev_solar_device_info
 
 
-async def async_setup_platform(
-    hass: HomeAssistant, config, async_add_entities, discovery_info=None
-):
-    """Set up the computed current sensor platform."""
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up the computed current sensor from a config entry."""
     controller = hass.data.get(DOMAIN, {}).get("controller")
     if not controller:
         return
     sensor = EVSolarComputedCurrentSensor(controller)
     async_add_entities([sensor], True)
-    # Register the sensor in the controller so it can call async_write_ha_state()
-    # immediately after each calculation instead of waiting for the HA polling cycle.
     controller.register_sensor(sensor)
 
 
