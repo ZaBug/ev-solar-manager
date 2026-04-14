@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from homeassistant.components.button import ButtonEntity
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
+from .device import ev_solar_device_info
 
 
 async def async_setup_platform(
@@ -22,7 +22,8 @@ async def async_setup_platform(
 class EVSolarRecalcButton(ButtonEntity):
     """Button that immediately triggers a recalculation and applies the result."""
 
-    _attr_name = "EV Solar Manager Recalculate Now"
+    _attr_has_entity_name = True
+    _attr_name = "Recalculate Now"
     _attr_icon = "mdi:refresh"
 
     def __init__(self, controller) -> None:
@@ -33,16 +34,9 @@ class EVSolarRecalcButton(ButtonEntity):
         return f"{DOMAIN}_recalculate_button"
 
     @property
-    def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, "ev_solar_manager")},
-            name="EV Solar Manager",
-            manufacturer="Custom",
-            model="EV Solar Manager",
-            sw_version="0.1.0",
-        )
+    def device_info(self):
+        return ev_solar_device_info()
 
     async def async_press(self) -> None:
         """Trigger an immediate recalculation when the button is pressed."""
         await self._controller._compute_and_apply("manual_trigger")
-

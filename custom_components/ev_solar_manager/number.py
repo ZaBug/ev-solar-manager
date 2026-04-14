@@ -7,14 +7,10 @@ when the override switch is turned ON.
 from __future__ import annotations
 
 from homeassistant.components.number import NumberEntity
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.core import HomeAssistant
 
-from .const import (
-    DOMAIN,
-    DEFAULT_MIN_CURRENT,
-    DEFAULT_MAX_CURRENT,
-)
+from .const import DOMAIN, DEFAULT_MIN_CURRENT, DEFAULT_MAX_CURRENT
+from .device import ev_solar_device_info
 
 
 async def async_setup_platform(
@@ -30,7 +26,8 @@ async def async_setup_platform(
 class EVSolarOverrideNumber(NumberEntity):
     """Number entity to set the manual override charging current (Amperes)."""
 
-    _attr_name = "EV Solar Manager Override Current"
+    _attr_has_entity_name = True
+    _attr_name = "Override Current"
     _attr_icon = "mdi:current-ac"
     _attr_native_step = 1
     _attr_native_unit_of_measurement = "A"
@@ -61,11 +58,5 @@ class EVSolarOverrideNumber(NumberEntity):
         return f"{DOMAIN}_override_number"
 
     @property
-    def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, "ev_solar_manager")},
-            name="EV Solar Manager",
-            manufacturer="Custom",
-            model="EV Solar Manager",
-            sw_version="0.1.0",
-        )
+    def device_info(self):
+        return ev_solar_device_info()
