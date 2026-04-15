@@ -1,4 +1,4 @@
-"""EV Solar Manager â€“ Home Assistant custom component.
+"""EV Solar Manager – Home Assistant custom component.
 
 Automatically adjusts the EV charger current to consume only the solar
 surplus exported to the grid, with an optional manual override.
@@ -31,6 +31,8 @@ ev_solar_manager:
   safety_margin_w: 100        # optional: keep this many Watts as buffer (default 0)
   charger_status_entity: sensor.duosida_status   # optional: charger status sensor
   charging_state: "Charging"                     # optional: state value that means charging (default "Charging")
+  charger_start_stop_button: button.duosida_start_stop_charging  # optional: toggle button
+  stopped_state: "Stopped"                       # optional: state value that means stopped/waiting (default "Stopped")
 """
 
 from __future__ import annotations
@@ -62,6 +64,8 @@ from .const import (
     CONF_SAFETY_MARGIN_W,
     CONF_CHARGER_STATUS_ENTITY,
     CONF_CHARGING_STATE,
+    CONF_CHARGER_START_STOP_BUTTON,
+    CONF_STOPPED_STATE,
     DEFAULT_MIN_CURRENT,
     DEFAULT_MAX_CURRENT,
     DEFAULT_UPDATE_INTERVAL,
@@ -70,6 +74,7 @@ from .const import (
     DEFAULT_PHASES,
     DEFAULT_SAFETY_MARGIN_W,
     DEFAULT_CHARGING_STATE,
+    DEFAULT_STOPPED_STATE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -78,7 +83,7 @@ PLATFORMS = ["switch", "number", "sensor", "button"]
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Handle YAML configuration â€“ trigger config flow import."""
+    """Handle YAML configuration – trigger config flow import."""
     if DOMAIN not in config:
         return True
 
@@ -119,19 +124,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     safety_margin_w = float(cfg.get(CONF_SAFETY_MARGIN_W, DEFAULT_SAFETY_MARGIN_W))
     charger_status_entity = cfg.get(CONF_CHARGER_STATUS_ENTITY)
     charging_state = cfg.get(CONF_CHARGING_STATE, DEFAULT_CHARGING_STATE)
+    charger_start_stop_button = cfg.get(CONF_CHARGER_START_STOP_BUTTON)
+    stopped_state = cfg.get(CONF_STOPPED_STATE, DEFAULT_STOPPED_STATE)
 
     hass.data.setdefault(DOMAIN, {})
     _LOGGER.info(
-        "EV Solar Manager: initializing â€“ power_entity=%s voltage_entity=%s "
+        "EV Solar Manager: initializing – power_entity=%s voltage_entity=%s "
         "target_number=%s min_current=%s max_current=%s update_interval=%ss "
         "min_delta_amp=%s export_is_negative=%s phases=%s "
         "charger_power_entity=%s safety_margin_w=%s "
-        "charger_status_entity=%s charging_state=%s",
+        "charger_status_entity=%s charging_state=%s "
+        "charger_start_stop_button=%s stopped_state=%s",
         power_entity, voltage_entity, target_number,
         min_current, max_current, update_interval,
         min_delta_amp, export_is_negative, phases,
         charger_power_entity, safety_margin_w,
         charger_status_entity, charging_state,
+        charger_start_stop_button, stopped_state,
     )
 
     controller = EVSolarController(
@@ -149,6 +158,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         safety_margin_w=safety_margin_w,
         charger_status_entity=charger_status_entity,
         charging_state=charging_state,
+        charger_start_stop_button=charger_start_stop_button,
+        stopped_state=stopped_state,
     )
     hass.data[DOMAIN]["controller"] = controller
 
@@ -160,7 +171,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _handle_stop)
 
-    # Load platforms â€“ they will pick up device_info from the config entry
+    # Load platforms – they will pick up device_info from the config entry
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
@@ -185,18 +196,24 @@ class EVSolarController:
     -------------
     If charger_status_entity is configured:
 
-      sensor.duosida_status == charging_state (e.g. "Charging")
-          â””â”€â–º _start_timer()  â€“ periodic recalculation every update_interval seconds
-              â””â”€â–º each tick: read solar data, calculate amps, write to charger
-                  (only if solar production > 0, otherwise skip to avoid noise)
+      charger → charging_state (e.g. "Charging")
+          └─► _start_timer()  – periodic recalculation every update_interval seconds
+              └─► each tick: read solar data, calculate amps, write to charger
 
-      sensor.duosida_status != charging_state (Finished / Available / unavailable)
-          â””â”€â–º _stop_timer()   â€“ no more API calls, no log noise
+      charger → stopped_state (e.g. "Stopped") AND _stopped_by_us is True
+          └─► _start_recovery_timer()  – checks every update_interval if solar returned
+              └─► surplus > 0: press start button → charger resumes → _start_timer()
+
+      charger → any other state (Finished / Available / disconnected / etc.)
+          └─► _stop_timer() + _stop_recovery_timer()  – no more API calls
 
     If charger_status_entity is NOT configured:
       Falls back to always-on timer (original behaviour).
 
-    Override mode bypasses the charging state check entirely.
+    If charger_start_stop_button is NOT configured:
+      Falls back to keeping min_current instead of pressing stop.
+
+    Override mode bypasses the charging state check and stop-on-no-injection entirely.
     """
 
     def __init__(
@@ -215,6 +232,8 @@ class EVSolarController:
         safety_margin_w: float = 0.0,
         charger_status_entity: Optional[str] = None,
         charging_state: str = "Charging",
+        charger_start_stop_button: Optional[str] = None,
+        stopped_state: str = "Stopped",
     ) -> None:
         self.hass = hass
         self.power_entity = power_entity
@@ -230,15 +249,20 @@ class EVSolarController:
         self.safety_margin_w = safety_margin_w
         self.charger_status_entity = charger_status_entity
         self.charging_state = charging_state
+        self.charger_start_stop_button = charger_start_stop_button
+        self.stopped_state = stopped_state
 
         self._unsub_timer = None
+        self._unsub_recovery_timer = None
         self._unsub_status_listener = None
         self._last_set_current: Optional[int] = None
         self._override_enabled: bool = False
         self._override_current: int = min_current
         self._computed_current: int = 0
         self._sensor_entity = None
-        self._is_charging: bool = False  # tracks whether charger is actively charging
+        self._is_charging: bool = False   # charger is in charging_state
+        self._stop_on_no_injection: bool = True   # stop charger when no solar surplus
+        self._stopped_by_us: bool = False          # True when we pressed stop due to no surplus
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -265,9 +289,9 @@ class EVSolarController:
             # to report their real state instead of 'unavailable'.
             self.hass.async_create_task(self._delayed_startup_check())
         else:
-            # No status entity configured â†’ always-on timer
+            # No status entity configured → always-on timer
             _LOGGER.info(
-                "EV Solar Manager: no charger_status_entity configured â€“ running in always-on mode"
+                "EV Solar Manager: no charger_status_entity configured – running in always-on mode"
             )
             self._is_charging = True
             self._start_timer()
@@ -279,11 +303,11 @@ class EVSolarController:
         current_state = self.hass.states.get(self.charger_status_entity)
         state_val = current_state.state if current_state else "unavailable"
         _LOGGER.info(
-            "EV Solar Manager: startup check â€“ charger status is '%s'", state_val
+            "EV Solar Manager: startup check – charger status is '%s'", state_val
         )
         if state_val == self.charging_state:
             _LOGGER.info(
-                "EV Solar Manager: charger is %s at startup â€“ starting timer",
+                "EV Solar Manager: charger is %s at startup – starting timer",
                 self.charging_state,
             )
             self._is_charging = True
@@ -291,13 +315,14 @@ class EVSolarController:
             await self._compute_and_apply("startup")
         else:
             _LOGGER.info(
-                "EV Solar Manager: charger status '%s' â‰  '%s' â€“ timer inactive",
+                "EV Solar Manager: charger status '%s' != '%s' – timer inactive",
                 state_val, self.charging_state,
             )
 
     async def async_stop(self) -> None:
-        """Cancel timer and all listeners on shutdown."""
+        """Cancel timers and all listeners on shutdown."""
         self._stop_timer()
+        self._stop_recovery_timer()
         if self._unsub_status_listener:
             self._unsub_status_listener()
             self._unsub_status_listener = None
@@ -321,8 +346,23 @@ class EVSolarController:
             self._unsub_timer = None
             _LOGGER.debug("EV Solar Manager: recalculation timer stopped")
 
+    def _start_recovery_timer(self) -> None:
+        """Start the solar-return recovery timer (idempotent)."""
+        if self._unsub_recovery_timer is None:
+            self._unsub_recovery_timer = async_track_time_interval(
+                self.hass, self._handle_recovery_timer, timedelta(seconds=self.update_interval)
+            )
+            _LOGGER.debug("EV Solar Manager: solar recovery timer started")
+
+    def _stop_recovery_timer(self) -> None:
+        """Stop the solar-return recovery timer (idempotent)."""
+        if self._unsub_recovery_timer is not None:
+            self._unsub_recovery_timer()
+            self._unsub_recovery_timer = None
+            _LOGGER.debug("EV Solar Manager: solar recovery timer stopped")
+
     # ------------------------------------------------------------------
-    # State change listener â€“ charger status
+    # State change listener – charger status
     # ------------------------------------------------------------------
 
     @callback
@@ -337,36 +377,110 @@ class EVSolarController:
             return  # no actual change
 
         _LOGGER.info(
-            "EV Solar Manager: charger status changed '%s' â†’ '%s'",
+            "EV Solar Manager: charger status changed '%s' → '%s'",
             old_val, new_val,
         )
 
         if new_val == self.charging_state:
-            # Charger started charging â†’ start timer and compute immediately
+            # Charger started charging → start recalculation timer
             self._is_charging = True
+            self._stopped_by_us = False
+            self._stop_recovery_timer()
             self._start_timer()
             self.hass.async_create_task(self._compute_and_apply("charging_started"))
-        else:
-            # Charger stopped / finished / disconnected â†’ stop timer
+
+        elif new_val == self.stopped_state and self._stopped_by_us:
+            # We pressed stop due to no surplus → watch for solar to return
             self._is_charging = False
             self._stop_timer()
-            # Reset last set current so next charge session starts fresh
+            self._last_set_current = None
+            self._start_recovery_timer()
+            _LOGGER.info(
+                "EV Solar Manager: charger stopped by us – waiting for solar surplus to return"
+            )
+
+        else:
+            # Car disconnected / charging finished / user stopped manually → reset everything
+            self._is_charging = False
+            self._stopped_by_us = False
+            self._stop_timer()
+            self._stop_recovery_timer()
             self._last_set_current = None
             _LOGGER.info(
-                "EV Solar Manager: timer stopped â€“ no active charging session"
+                "EV Solar Manager: charger status '%s' – timers stopped", new_val
             )
 
     # ------------------------------------------------------------------
-    # Timer callback
+    # Timer callbacks
     # ------------------------------------------------------------------
 
     async def _handle_timer(self, now) -> None:
-        """Called every update_interval seconds while charger is active."""
+        """Called every update_interval seconds while charger is actively charging."""
         await self._compute_and_apply("timer")
+
+    async def _handle_recovery_timer(self, now) -> None:
+        """Called every update_interval seconds while we wait for solar surplus to return.
+
+        If surplus is back and charger is still in stopped_state, press start.
+        """
+        if not self._stopped_by_us or not self.charger_start_stop_button:
+            self._stop_recovery_timer()
+            return
+
+        # Verify the charger is still in the state we expect (car still connected)
+        if self.charger_status_entity:
+            state = self.hass.states.get(self.charger_status_entity)
+            state_val = state.state if state else "unavailable"
+            if state_val != self.stopped_state:
+                _LOGGER.info(
+                    "EV Solar Manager: recovery timer – charger is now '%s' (not '%s') – stopping recovery",
+                    state_val, self.stopped_state,
+                )
+                self._stopped_by_us = False
+                self._stop_recovery_timer()
+                return
+
+        available_w = self._read_available_w()
+        if available_w is None:
+            _LOGGER.debug("EV Solar Manager: recovery timer – sensors unavailable, retrying")
+            return
+
+        if available_w > 0:
+            _LOGGER.info(
+                "EV Solar Manager: solar surplus returned (%.1f W) – pressing start", available_w
+            )
+            # Stop the recovery timer first; the status listener will start the regular timer
+            # once the charger confirms it is back in charging_state.
+            self._stop_recovery_timer()
+            await self._press_charger_button("surplus_returned_start")
+        else:
+            _LOGGER.debug(
+                "EV Solar Manager: recovery timer – still no surplus (%.1f W) – waiting", available_w
+            )
 
     # ------------------------------------------------------------------
     # Public API (used by switch / number / button entities)
     # ------------------------------------------------------------------
+
+    def set_stop_on_no_injection(self, enabled: bool) -> None:
+        """Enable or disable stop-on-no-injection mode.
+
+        If disabled while we had stopped the charger, press start immediately.
+        """
+        self._stop_on_no_injection = enabled
+        if not enabled and self._stopped_by_us:
+            # User turned off the feature while charger was stopped by us – resume charging
+            _LOGGER.info(
+                "EV Solar Manager: stop-on-no-injection disabled – restarting charger we stopped"
+            )
+            self._stopped_by_us = False
+            self._stop_recovery_timer()
+            if self.charger_start_stop_button:
+                self.hass.async_create_task(
+                    self._press_charger_button("stop_on_no_injection_disabled")
+                )
+        else:
+            self.hass.async_create_task(self._compute_and_apply("stop_on_no_injection_toggle"))
 
     def set_override(self, enabled: bool) -> None:
         """Enable or disable manual override mode."""
@@ -402,7 +516,7 @@ class EVSolarController:
     async def _compute_and_apply(self, reason: str) -> None:
         """Compute the desired charging current and write it to the charger if needed."""
         try:
-            # --- Override mode: bypasses charging state check ---
+            # --- Override mode: bypasses all charging state and solar checks ---
             if self._override_enabled:
                 target = self._override_current
                 self._computed_current = target
@@ -442,8 +556,8 @@ class EVSolarController:
                 voltage_v = 230.0
 
             # --- Determine net grid power direction ---
-            # export_is_negative=True  â†’ sensor is negative when exporting (bidirectional meter)
-            # export_is_negative=False â†’ sensor is positive when exporting (production sensor)
+            # export_is_negative=True  → sensor is negative when exporting (bidirectional meter)
+            # export_is_negative=False → sensor is positive when exporting (production sensor)
             if self.export_is_negative:
                 signed_export_w = -power_w  # positive = exporting, negative = importing
             else:
@@ -473,20 +587,41 @@ class EVSolarController:
                 charger_consumption_w, self.safety_margin_w, available_w, self.phases,
             )
 
-            # --- Guard: skip if no solar production at all ---
-            # available_w â‰¤ 0 means we are importing from the grid even without the EV.
-            # Keep the charger at min_current but do NOT write if already there â€“
-            # avoids pointless API calls at night or on cloudy days.
+            # --- Guard: no solar surplus ---
+            # available_w <= 0 means we are importing from grid even without the EV.
             if available_w <= 0 and voltage_v > 0:
-                amps = self.min_current
-                if self._last_set_current == self.min_current:
-                    _LOGGER.debug(
-                        "No solar production (available_w=%.1f) and already at min_current=%sA â€“ skipping write",
-                        available_w, self.min_current,
-                    )
-                    return
+                if self._stop_on_no_injection and self.charger_start_stop_button:
+                    # Press the toggle stop button once; recovery timer takes over from here.
+                    if not self._stopped_by_us:
+                        _LOGGER.info(
+                            "No solar surplus (available_w=%.1f W) – pressing stop button",
+                            available_w,
+                        )
+                        self._stopped_by_us = True
+                        await self._press_charger_button("no_surplus_stop")
+                        # The status listener will see the charger enter stopped_state and
+                        # start the recovery timer automatically.
+                    else:
+                        _LOGGER.debug(
+                            "No solar surplus (available_w=%.1f W) – already stopped by us",
+                            available_w,
+                        )
+                else:
+                    # No start/stop button configured → fall back to keeping min_current
+                    amps = self.min_current
+                    if self._last_set_current == self.min_current:
+                        _LOGGER.debug(
+                            "No solar production (available_w=%.1f W) and already at min_current=%sA – skipping write",
+                            available_w, self.min_current,
+                        )
+                        return
+                    self._computed_current = amps
+                    await self._maybe_set_current(amps, reason)
+                    self._push_sensor_state()
+                return
+
             elif voltage_v > 0:
-                # I = P / (U Ã— phases)
+                # I = P / (U × phases)
                 amps = round(available_w / (voltage_v * self.phases))
                 amps = max(self.min_current, min(self.max_current, amps))
             else:
@@ -507,9 +642,10 @@ class EVSolarController:
             and abs(amps - self._last_set_current) < self.min_delta_amp
             and reason != "startup"
             and reason != "charging_started"
+            and reason != "stop_on_no_injection_toggle"
         ):
             _LOGGER.debug(
-                "Skipping update â€“ delta too small: last=%sA new=%sA reason=%s",
+                "Skipping update – delta too small: last=%sA new=%sA reason=%s",
                 self._last_set_current, amps, reason,
             )
             return
@@ -523,3 +659,54 @@ class EVSolarController:
         )
         self._last_set_current = amps
 
+    async def _press_charger_button(self, reason: str) -> None:
+        """Press the charger's start/stop toggle button."""
+        _LOGGER.info(
+            "EV Solar Manager: pressing charger button '%s' (reason: %s)",
+            self.charger_start_stop_button, reason,
+        )
+        await self.hass.services.async_call(
+            "button",
+            "press",
+            {"entity_id": self.charger_start_stop_button},
+            blocking=True,
+        )
+
+    def _read_available_w(self) -> Optional[float]:
+        """Read power/voltage sensors and return net available solar surplus watts.
+
+        Returns None if any sensor is unavailable or unreadable.
+        Used by the recovery timer to decide when to restart the charger.
+        """
+        power_state = self.hass.states.get(self.power_entity)
+        voltage_state = self.hass.states.get(self.voltage_entity)
+        if not power_state or not voltage_state:
+            return None
+
+        try:
+            power_w = float(power_state.state)
+        except (ValueError, TypeError):
+            return None
+
+        try:
+            voltage_v = float(voltage_state.state)
+        except (ValueError, TypeError):
+            return None
+
+        if voltage_v <= 0:
+            return None
+
+        signed_export_w = -power_w if self.export_is_negative else power_w
+
+        # When charger is stopped we have no real load, but include charger_power_entity
+        # reading if available (should be 0 W while stopped anyway).
+        charger_consumption_w = 0.0
+        if self.charger_power_entity:
+            charger_state = self.hass.states.get(self.charger_power_entity)
+            if charger_state:
+                try:
+                    charger_consumption_w = float(charger_state.state)
+                except (ValueError, TypeError):
+                    charger_consumption_w = 0.0
+
+        return signed_export_w + charger_consumption_w - self.safety_margin_w
