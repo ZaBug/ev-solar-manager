@@ -305,7 +305,17 @@ class EVSolarController:
             )
 
     async def _delayed_startup_check(self) -> None:
-        """Wait for integrations to settle, then check charger state."""
+        """Wait for integrations to settle, then check charger state.
+
+        Three outcomes after the delay:
+          1. charging_state  → start the recalculation timer immediately.
+          2. stopped_state + stop_on_no_injection + button configured
+                             → arm the recovery timer so charging resumes
+                               automatically once solar surplus is sufficient.
+                               This handles the HA-restart-while-stopped case
+                               where _stopped_by_us was lost from memory.
+          3. Any other state (Finished, disconnected, …) → stay idle.
+        """
         await asyncio.sleep(10)  # give Duosida / other integrations 10s to report real state
         current_state = self.hass.states.get(self.charger_status_entity)
         state_val = current_state.state if current_state else "unavailable"
@@ -320,10 +330,28 @@ class EVSolarController:
             self._is_charging = True
             self._start_timer()
             await self._compute_and_apply("startup")
+
+        elif (
+            state_val == self.stopped_state
+            and self._stop_on_no_injection
+            and self.charger_start_stop_button
+        ):
+            # Car is connected and stopped (e.g. after HA restart while we had
+            # previously stopped it, or charger waiting for a start command).
+            # Arm the recovery timer – it will press start as soon as surplus
+            # reaches min_surplus_w, without waiting for user intervention.
+            self._stopped_by_us = True
+            self._start_recovery_timer()
+            _LOGGER.info(
+                "EV Solar Manager: charger is '%s' at startup – arming recovery timer "
+                "to restart when solar surplus is sufficient",
+                state_val,
+            )
+
         else:
             _LOGGER.info(
-                "EV Solar Manager: charger status '%s' != '%s' – timer inactive",
-                state_val, self.charging_state,
+                "EV Solar Manager: charger status '%s' – staying idle at startup",
+                state_val,
             )
 
     async def async_stop(self) -> None:
