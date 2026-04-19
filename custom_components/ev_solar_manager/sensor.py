@@ -6,7 +6,7 @@ The value is pushed immediately after every recalculation (no polling).
 
 from __future__ import annotations
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -36,8 +36,9 @@ class EVSolarComputedCurrentSensor(SensorEntity):
     _attr_has_entity_name = True
     _attr_name = "Computed Current"
     _attr_icon = "mdi:current-ac"
+    _attr_device_class = SensorDeviceClass.CURRENT
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "A"
-    _attr_state_class = "measurement"
     _attr_should_poll = False  # state is pushed by the controller after each calculation
 
     def __init__(self, controller) -> None:

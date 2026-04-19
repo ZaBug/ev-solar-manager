@@ -48,6 +48,22 @@ you need full-speed charging regardless of solar production.
    `min_delta_amp` Amperes — to avoid hammering the charger with tiny adjustments.
 5. When no solar budget is available the charger is set to `min_current`.
 
+### Stop on no solar surplus
+
+When `charger_start_stop_button` is configured, the integration can automatically
+**stop the charger** when there is no more solar surplus and **restart it** once
+surplus returns. This is controlled by `switch.ev_solar_manager_stop_on_no_injection`
+(enabled by default).
+
+- No surplus → controller presses the toggle button → charger stops.
+- A recovery timer polls every `update_interval` seconds. When surplus returns,
+  the button is pressed again → charger resumes.
+- If the car is disconnected or the user stops charging manually, the recovery timer
+  is cancelled automatically (only restarts when `_stopped_by_us` is `True`).
+
+Without `charger_start_stop_button`, the charger falls back to staying at `min_current`
+when there is no surplus (original behaviour).
+
 ### Override mode
 
 Turn on `switch.ev_solar_manager_override` to lock the charger to the current set
@@ -68,6 +84,7 @@ testing and debugging.
 |--------|------|-------------|
 | `sensor.ev_solar_manager_computed_current` | Sensor (A) | Last current calculated from solar data |
 | `switch.ev_solar_manager_override` | Switch | Enable / disable manual override |
+| `switch.ev_solar_manager_stop_on_no_injection` | Switch | Stop charger automatically when no solar surplus (requires `charger_start_stop_button`) |
 | `number.ev_solar_manager_override_current` | Number (A) | Manual current for override mode |
 | `button.ev_solar_manager_recalculate_now` | Button | Trigger an immediate recalculation |
 
@@ -136,6 +153,10 @@ ev_solar_manager:
   phases: 1               # charging phases – 1 for single-phase, 3 for three-phase (default: 1)
   charger_power_entity: sensor.shellyem3_xxxx_channel_b_power  # real charger power sensor (W)
   safety_margin_w: 100    # keep this many Watts as buffer to avoid grid import (default: 0)
+  charger_status_entity: sensor.duosida_status   # optional: charger status sensor
+  charging_state: "Charging"                     # optional: state value that means charging (default "Charging")
+  charger_start_stop_button: button.duosida_start_stop_charging  # optional: toggle button
+  stopped_state: "Stopped"                       # optional: state value that means stopped/waiting (default "Stopped")
 ```
 
 ### Enable debug logging
@@ -164,6 +185,10 @@ logger:
 | `phases` | ❌ | `1` | Set to `3` if your charger operates on three-phase AC |
 | `charger_power_entity` | ❌ | — | Real-time charger power sensor (W). When set, used instead of the estimated value for charger compensation. Recommended for best accuracy. |
 | `safety_margin_w` | ❌ | `0` | Watts to keep as buffer. Set to e.g. `100` to always inject ≥100 W to the grid and avoid accidental import. |
+| `charger_status_entity` | ❌ | — | Entity ID of the charger status sensor. When set, the recalculation timer runs only while the charger is in `charging_state`. |
+| `charging_state` | ❌ | `"Charging"` | State string that means the charger is actively charging. |
+| `charger_start_stop_button` | ❌ | — | Entity ID of the charger's start/stop toggle button. Enables automatic stop when no solar surplus and restart when surplus returns. |
+| `stopped_state` | ❌ | `"Stopped"` | State string that means the charger is stopped/waiting. Used to confirm the charger stopped after the button press. |
 
 ### How to determine `export_is_negative`
 
@@ -262,6 +287,10 @@ automation:
 
 Pull requests and issues are welcome. Please include relevant log lines and your
 `configuration.yaml` snippet (without secrets) when reporting a bug.
+
+If you are an AI coding agent or want a quick architectural overview before contributing,
+read [`AGENTS.md`](./AGENTS.md) at the project root – it documents the architecture,
+file map, design decisions, and conventions specific to this codebase.
 
 ---
 
