@@ -34,6 +34,7 @@ All entities share a single HA device via `ev_solar_device_info()` in `device.py
 - **`_stopped_by_us` flag**: Distinguishes our stop press from user/charger-initiated stops. Only when this is `True` does the recovery timer restart charging.
 - **`min_delta_amp` suppression**: `_maybe_set_current()` skips writes smaller than this threshold, except for reasons: `startup`, `charging_started`, `stop_on_no_injection_toggle`, `manual_trigger`. This ensures explicit user actions always apply immediately.
 - **Charger compensation formula**: `available_w = signed_export_w + charger_consumption_w - safety_margin_w`. Real sensor preferred over estimate (`last_set_amps × V × phases`).
+- **Minimum-surplus threshold**: The controller stops (or falls back to `min_current`) when `available_w < min_current × voltage × phases`. This prevents silently drawing the deficit from the grid when other appliances (e.g. washing machine) reduce solar export below the IEC 61851 minimum of 6 A worth of watts. The recovery timer uses the same threshold to decide when to restart charging. The threshold is computed dynamically using the live voltage reading (falls back to 230 V if unavailable).
 
 ## File Map
 

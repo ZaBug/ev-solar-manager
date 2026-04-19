@@ -452,9 +452,18 @@ class EVSolarController:
             _LOGGER.debug("EV Solar Manager: recovery timer – sensors unavailable, retrying")
             return
 
-        if available_w > 0:
+        # Read voltage to compute the minimum viable surplus threshold.
+        voltage_state = self.hass.states.get(self.voltage_entity)
+        try:
+            voltage_v = float(voltage_state.state) if voltage_state else 230.0
+        except (ValueError, TypeError):
+            voltage_v = 230.0
+        min_surplus_w = self.min_current * voltage_v * self.phases
+
+        if available_w >= min_surplus_w:
             _LOGGER.info(
-                "EV Solar Manager: solar surplus returned (%.1f W) – pressing start", available_w
+                "EV Solar Manager: sufficient solar surplus returned (%.1f W >= %.1f W min) – pressing start",
+                available_w, min_surplus_w,
             )
             # Stop the recovery timer first; the status listener will start the regular timer
             # once the charger confirms it is back in charging_state.
@@ -462,7 +471,8 @@ class EVSolarController:
             await self._press_charger_button("surplus_returned_start")
         else:
             _LOGGER.debug(
-                "EV Solar Manager: recovery timer – still no surplus (%.1f W) – waiting", available_w
+                "EV Solar Manager: recovery timer – surplus %.1f W still below threshold %.1f W – waiting",
+                available_w, min_surplus_w,
             )
 
     # ------------------------------------------------------------------
@@ -597,15 +607,21 @@ class EVSolarController:
                 charger_consumption_w, self.safety_margin_w, available_w, self.phases,
             )
 
-            # --- Guard: no solar surplus ---
-            # available_w <= 0 means we are importing from grid even without the EV.
-            if available_w <= 0 and voltage_v > 0:
+            # --- Guard: insufficient solar surplus ---
+            # Stop (or fall back) when available power is less than the minimum needed to
+            # sustain IEC 61851 minimum charging current:
+            #   min_surplus_w = min_current × voltage × phases
+            # This prevents the charger from being set to min_current while actually
+            # drawing that deficit power from the grid (e.g. when a washing machine
+            # starts and reduces the available solar export below 6 A worth of watts).
+            min_surplus_w = self.min_current * voltage_v * self.phases
+            if available_w < min_surplus_w and voltage_v > 0:
                 if self._stop_on_no_injection and self.charger_start_stop_button:
                     # Press the toggle stop button once; recovery timer takes over from here.
                     if not self._stopped_by_us:
                         _LOGGER.info(
-                            "EV Solar Manager: no solar surplus (available_w=%.1f W) – pressing stop button",
-                            available_w,
+                            "EV Solar Manager: surplus too low (available_w=%.1f W < min_surplus_w=%.1f W) – pressing stop button",
+                            available_w, min_surplus_w,
                         )
                         self._stopped_by_us = True
                         await self._press_charger_button("no_surplus_stop")
@@ -613,16 +629,16 @@ class EVSolarController:
                         # start the recovery timer automatically.
                     else:
                         _LOGGER.debug(
-                            "EV Solar Manager: no solar surplus (available_w=%.1f W) – already stopped by us",
-                            available_w,
+                            "EV Solar Manager: surplus too low (available_w=%.1f W < min_surplus_w=%.1f W) – already stopped by us",
+                            available_w, min_surplus_w,
                         )
                 else:
                     # No start/stop button configured → fall back to keeping min_current
                     amps = self.min_current
                     if self._last_set_current == self.min_current:
                         _LOGGER.debug(
-                            "EV Solar Manager: no solar surplus (available_w=%.1f W) and already at min_current=%sA – skipping write",
-                            available_w, self.min_current,
+                            "EV Solar Manager: surplus too low (available_w=%.1f W < min_surplus_w=%.1f W) and already at min_current=%sA – skipping write",
+                            available_w, min_surplus_w, self.min_current,
                         )
                         return
                     self._computed_current = amps

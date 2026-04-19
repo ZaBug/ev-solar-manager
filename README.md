@@ -32,6 +32,69 @@ you need full-speed charging regardless of solar production.
                                           └──────────────────────────────────────┘
 ```
 
+### Logic flow diagram
+
+```mermaid
+flowchart TD
+    START([HA Start / Reload]) --> HAS_STATUS{charger_status_entity\nconfigured?}
+
+    HAS_STATUS -- No --> ALWAYS_ON[Always-on timer\n_is_charging = True]
+    ALWAYS_ON --> TICK
+
+    HAS_STATUS -- Yes --> WATCH[Watch charger\nstatus sensor]
+    WATCH --> STATUS_CHG{Status change?}
+
+    STATUS_CHG -- charging_state\ne.g. Charging --> START_TIMER[Start recalc timer\n_is_charging = True\n_stopped_by_us = False]
+    START_TIMER --> TICK
+
+    STATUS_CHG -- stopped_state AND\n_stopped_by_us=True --> REC_TIMER[Start recovery timer\n_is_charging = False]
+    REC_TIMER --> REC_TICK
+
+    STATUS_CHG -- any other state\nFinished / Disconnected --> IDLE([Timers stopped\nWaiting...])
+
+    TICK([Every update_interval\nseconds]) --> OVERRIDE{Override\nswitch ON?}
+
+    OVERRIDE -- Yes --> SET_OVERRIDE[Set override_current\nto charger] --> DONE([Done])
+
+    OVERRIDE -- No --> READ[Read sensors:\ngrid_power_w\ngrid_voltage_v\ncharger_power_w]
+
+    READ --> CALC["available_w =\nsigned_export_w\n+ charger_load_w\n- safety_margin_w"]
+
+    CALC --> THRESH{"available_w <\nmin_current × V × phases\n(min_surplus_w)?"}
+
+    THRESH -- Yes, stop_on_no_injection=ON\nAND button configured --> STOPPED_US{_stopped_by_us\nalready?}
+    STOPPED_US -- No --> PRESS_STOP[Press stop button\n_stopped_by_us = True]
+    PRESS_STOP --> STATUS_CHG
+    STOPPED_US -- Yes --> DONE2([Skip - already stopped])
+
+    THRESH -- Yes, no button\nOR switch OFF --> SET_MIN[Set min_current\nto charger]
+    SET_MIN --> DONE3([Done])
+
+    THRESH -- No → surplus OK --> CALC_A["amps = round(available_w\n/ V × phases)\nclamp to min…max"]
+    CALC_A --> DELTA{"Change ≥\nmin_delta_amp?\nor bypass reason?"}
+    DELTA -- No --> SKIP([Skip write])
+    DELTA -- Yes --> WRITE[Write amps to\ntarget_number entity]
+    WRITE --> SENSOR[Push computed\ncurrent sensor]
+
+    REC_TICK([Recovery timer tick]) --> STILL_STOPPED{Charger still\nin stopped_state?}
+    STILL_STOPPED -- No --> CANCEL_REC[Cancel recovery timer\n_stopped_by_us = False]
+    STILL_STOPPED -- Yes --> READ_REC[Read sensors]
+    READ_REC --> REC_THRESH{"available_w ≥\nmin_surplus_w?"}
+    REC_THRESH -- No --> WAIT([Wait next tick])
+    REC_THRESH -- Yes --> PRESS_START[Press start button\nStop recovery timer]
+    PRESS_START --> STATUS_CHG
+
+    style START fill:#4CAF50,color:#fff
+    style IDLE fill:#9E9E9E,color:#fff
+    style PRESS_STOP fill:#F44336,color:#fff
+    style PRESS_START fill:#4CAF50,color:#fff
+    style WRITE fill:#2196F3,color:#fff
+    style SET_OVERRIDE fill:#FF9800,color:#fff
+    style SET_MIN fill:#FF9800,color:#fff
+    style THRESH fill:#FFF9C4
+    style REC_THRESH fill:#FFF9C4
+```
+
 1. Every `update_interval` seconds the controller reads the **grid power sensor**.
 2. It compensates for the EV charger's own consumption (which is already embedded
    in the grid meter reading) to find the true available solar budget:
@@ -46,23 +109,39 @@ you need full-speed charging regardless of solar production.
    ```
 4. The value is written to the charger entity **only** if the change is at least
    `min_delta_amp` Amperes — to avoid hammering the charger with tiny adjustments.
-5. When no solar budget is available the charger is set to `min_current`.
+5. If the available solar budget is **below the minimum viable threshold**
+   (`min_current × voltage × phases` watts), the controller stops the charger (if
+   `charger_start_stop_button` is configured) or falls back to `min_current` — it
+   will **not** silently draw the difference from the grid.
 
 ### Stop on no solar surplus
 
 When `charger_start_stop_button` is configured, the integration can automatically
-**stop the charger** when there is no more solar surplus and **restart it** once
-surplus returns. This is controlled by `switch.ev_solar_manager_stop_on_no_injection`
+**stop the charger** when the solar surplus is insufficient and **restart it** once
+enough surplus returns. This is controlled by `switch.ev_solar_manager_stop_on_no_injection`
 (enabled by default).
 
-- No surplus → controller presses the toggle button → charger stops.
-- A recovery timer polls every `update_interval` seconds. When surplus returns,
-  the button is pressed again → charger resumes.
+The stop threshold is based on the **minimum viable charging current** (IEC 61851 ≥ 6 A):
+
+```
+min_surplus_w = min_current × grid_voltage × phases
+```
+
+If `available_w < min_surplus_w`, the charger would have to draw the deficit from
+the grid even at its lowest allowed setting — so the controller stops it instead.
+
+**Example:** `min_current=6`, `voltage=230 V`, `phases=1` → threshold is **1 380 W**.
+If another appliance (e.g. a washing machine) starts and reduces the solar export
+below 1 380 W — even if some solar is still going out — the charger is stopped.
+
+- Below threshold → controller presses the toggle button → charger stops.
+- A recovery timer polls every `update_interval` seconds. When surplus rises back
+  above `min_surplus_w`, the button is pressed again → charger resumes.
 - If the car is disconnected or the user stops charging manually, the recovery timer
   is cancelled automatically (only restarts when `_stopped_by_us` is `True`).
 
 Without `charger_start_stop_button`, the charger falls back to staying at `min_current`
-when there is no surplus (original behaviour).
+when the surplus is below threshold (original behaviour).
 
 ### Override mode
 
@@ -240,6 +319,11 @@ entities:
 ### The charger is always set to `min_current`
 
 Your power sensor is probably **positive** when exporting. Add `export_is_negative: false`.
+
+Also check that your solar surplus exceeds `min_current × voltage × phases` watts (e.g. 1 380 W
+for 6 A / 230 V / 1 phase). If another heavy appliance is running, the surplus may be
+below this threshold and the charger will remain at `min_current` (no start/stop button)
+or be stopped (with start/stop button configured).
 
 ### The current still leaves unused solar surplus
 
