@@ -1,7 +1,7 @@
 {
   "domain": "ev_solar_manager",
   "name": "EV Solar Manager",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "documentation": "https://github.com/ZaBug/ev-solar-manager",
   "issue_tracker": "https://github.com/ZaBug/ev-solar-manager/issues",
   "codeowners": ["@ZaBug"],
