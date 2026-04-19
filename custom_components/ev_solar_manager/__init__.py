@@ -591,7 +591,7 @@ class EVSolarController:
             available_w = signed_export_w + charger_consumption_w - self.safety_margin_w
 
             _LOGGER.debug(
-                "power_w=%.1f V=%.1f signed_export_w=%.1f "
+                "EV Solar Manager: power_w=%.1f V=%.1f signed_export_w=%.1f "
                 "charger_load_w=%.1f safety_margin_w=%.1f available_w=%.1f phases=%s",
                 power_w, voltage_v, signed_export_w,
                 charger_consumption_w, self.safety_margin_w, available_w, self.phases,
