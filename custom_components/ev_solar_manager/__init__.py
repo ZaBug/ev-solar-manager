@@ -83,20 +83,40 @@ PLATFORMS = ["switch", "number", "sensor", "button"]
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Handle YAML configuration – trigger config flow import."""
+    """Handle YAML configuration – trigger config flow import or update existing entry.
+
+    Every time HA loads (or reloads) the integration, we push the current YAML
+    values into the config entry so that changes to configuration.yaml are
+    picked up without having to delete and recreate the entry.
+    """
     if DOMAIN not in config:
         return True
 
-    # If no config entry exists yet, trigger the import flow.
-    # This creates a config entry which allows proper device grouping in HA.
-    if not hass.config_entries.async_entries(DOMAIN):
+    yaml_data = dict(config[DOMAIN])
+    existing_entries = hass.config_entries.async_entries(DOMAIN)
+
+    if not existing_entries:
+        # First run – create the config entry via the import flow.
         hass.async_create_task(
             hass.config_entries.flow.async_init(
                 DOMAIN,
                 context={"source": "import"},
-                data=config[DOMAIN],
+                data=yaml_data,
             )
         )
+    else:
+        # Entry already exists – update its data with the current YAML values
+        # so changes to configuration.yaml take effect on the next HA reload.
+        entry = existing_entries[0]
+        if entry.data != yaml_data:
+            _LOGGER.info(
+                "EV Solar Manager: configuration.yaml changed – updating config entry and reloading"
+            )
+            hass.config_entries.async_update_entry(entry, data=yaml_data)
+            hass.async_create_task(
+                hass.config_entries.async_reload(entry.entry_id)
+            )
+
     return True
 
 
