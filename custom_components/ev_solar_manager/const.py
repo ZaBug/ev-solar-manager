@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "ev_solar_manager"
-INTEGRATION_VERSION = "1.0.0"  # keep in sync with manifest.json
+INTEGRATION_VERSION = "1.1.0"  # keep in sync with manifest.json
 
 # --- Configuration keys ---
 CONF_TARGET_NUMBER = "target_number"
