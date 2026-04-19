@@ -46,23 +46,39 @@ you need full-speed charging regardless of solar production.
    ```
 4. The value is written to the charger entity **only** if the change is at least
    `min_delta_amp` Amperes — to avoid hammering the charger with tiny adjustments.
-5. When no solar budget is available the charger is set to `min_current`.
+5. If the available solar budget is **below the minimum viable threshold**
+   (`min_current × voltage × phases` watts), the controller stops the charger (if
+   `charger_start_stop_button` is configured) or falls back to `min_current` — it
+   will **not** silently draw the difference from the grid.
 
 ### Stop on no solar surplus
 
 When `charger_start_stop_button` is configured, the integration can automatically
-**stop the charger** when there is no more solar surplus and **restart it** once
-surplus returns. This is controlled by `switch.ev_solar_manager_stop_on_no_injection`
+**stop the charger** when the solar surplus is insufficient and **restart it** once
+enough surplus returns. This is controlled by `switch.ev_solar_manager_stop_on_no_injection`
 (enabled by default).
 
-- No surplus → controller presses the toggle button → charger stops.
-- A recovery timer polls every `update_interval` seconds. When surplus returns,
-  the button is pressed again → charger resumes.
+The stop threshold is based on the **minimum viable charging current** (IEC 61851 ≥ 6 A):
+
+```
+min_surplus_w = min_current × grid_voltage × phases
+```
+
+If `available_w < min_surplus_w`, the charger would have to draw the deficit from
+the grid even at its lowest allowed setting — so the controller stops it instead.
+
+**Example:** `min_current=6`, `voltage=230 V`, `phases=1` → threshold is **1 380 W**.
+If another appliance (e.g. a washing machine) starts and reduces the solar export
+below 1 380 W — even if some solar is still going out — the charger is stopped.
+
+- Below threshold → controller presses the toggle button → charger stops.
+- A recovery timer polls every `update_interval` seconds. When surplus rises back
+  above `min_surplus_w`, the button is pressed again → charger resumes.
 - If the car is disconnected or the user stops charging manually, the recovery timer
   is cancelled automatically (only restarts when `_stopped_by_us` is `True`).
 
 Without `charger_start_stop_button`, the charger falls back to staying at `min_current`
-when there is no surplus (original behaviour).
+when the surplus is below threshold (original behaviour).
 
 ### Override mode
 
@@ -240,6 +256,11 @@ entities:
 ### The charger is always set to `min_current`
 
 Your power sensor is probably **positive** when exporting. Add `export_is_negative: false`.
+
+Also check that your solar surplus exceeds `min_current × voltage × phases` watts (e.g. 1 380 W
+for 6 A / 230 V / 1 phase). If another heavy appliance is running, the surplus may be
+below this threshold and the charger will remain at `min_current` (no start/stop button)
+or be stopped (with start/stop button configured).
 
 ### The current still leaves unused solar surplus
 
