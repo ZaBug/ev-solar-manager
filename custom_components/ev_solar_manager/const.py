@@ -39,4 +39,5 @@ SWITCH_STOP_ON_NO_INJECTION_ENTITY = "switch.ev_solar_manager_stop_on_no_injecti
 NUMBER_OVERRIDE_ENTITY = "number.ev_solar_manager_override_current"
 SENSOR_COMPUTED_ENTITY = "sensor.ev_solar_manager_computed_current"
 BUTTON_RECALC_ENTITY = "button.ev_solar_manager_recalculate_now"
-SENSOR_CHARGING_STATUS_ENTITY = "binary_sensor.ev_solar_manager_is_charging"
+# Reserved for a future binary_sensor platform – not yet implemented:
+# SENSOR_CHARGING_STATUS_ENTITY = "binary_sensor.ev_solar_manager_is_charging"

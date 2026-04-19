@@ -297,6 +297,13 @@ class EVSolarController:
             self._start_timer()
             self.hass.async_create_task(self._compute_and_apply("startup"))
 
+        if self._stop_on_no_injection and not self.charger_start_stop_button:
+            _LOGGER.warning(
+                "EV Solar Manager: switch.ev_solar_manager_stop_on_no_injection is enabled "
+                "but charger_start_stop_button is not configured – the switch has no effect. "
+                "Add charger_start_stop_button to your configuration to enable automatic stop/start."
+            )
+
     async def _delayed_startup_check(self) -> None:
         """Wait for integrations to settle, then check charger state."""
         await asyncio.sleep(10)  # give Duosida / other integrations 10s to report real state
@@ -528,7 +535,8 @@ class EVSolarController:
             # (when charger_status_entity is set; otherwise _is_charging is always True)
             if not self._is_charging:
                 _LOGGER.debug(
-                    "Skipping calculation: charger is not in '%s' state", self.charging_state
+                    "EV Solar Manager: skipping calculation – charger is not in '%s' state",
+                    self.charging_state,
                 )
                 return
 
@@ -536,14 +544,15 @@ class EVSolarController:
             power_state = self.hass.states.get(self.power_entity)
             voltage_state = self.hass.states.get(self.voltage_entity)
             if not power_state or not voltage_state:
-                _LOGGER.debug("Skipping calculation: source entities not yet available")
+                _LOGGER.debug("EV Solar Manager: skipping calculation – source entities not yet available")
                 return
 
             try:
                 power_w = float(power_state.state)
             except (ValueError, TypeError):
                 _LOGGER.warning(
-                    "Cannot parse power state '%s', defaulting to 0 W", power_state.state
+                    "EV Solar Manager: cannot parse power state '%s', defaulting to 0 W",
+                    power_state.state,
                 )
                 power_w = 0.0
 
@@ -551,7 +560,8 @@ class EVSolarController:
                 voltage_v = float(voltage_state.state)
             except (ValueError, TypeError):
                 _LOGGER.warning(
-                    "Cannot parse voltage state '%s', defaulting to 230 V", voltage_state.state
+                    "EV Solar Manager: cannot parse voltage state '%s', defaulting to 230 V",
+                    voltage_state.state,
                 )
                 voltage_v = 230.0
 
@@ -594,7 +604,7 @@ class EVSolarController:
                     # Press the toggle stop button once; recovery timer takes over from here.
                     if not self._stopped_by_us:
                         _LOGGER.info(
-                            "No solar surplus (available_w=%.1f W) – pressing stop button",
+                            "EV Solar Manager: no solar surplus (available_w=%.1f W) – pressing stop button",
                             available_w,
                         )
                         self._stopped_by_us = True
@@ -603,7 +613,7 @@ class EVSolarController:
                         # start the recovery timer automatically.
                     else:
                         _LOGGER.debug(
-                            "No solar surplus (available_w=%.1f W) – already stopped by us",
+                            "EV Solar Manager: no solar surplus (available_w=%.1f W) – already stopped by us",
                             available_w,
                         )
                 else:
@@ -611,7 +621,7 @@ class EVSolarController:
                     amps = self.min_current
                     if self._last_set_current == self.min_current:
                         _LOGGER.debug(
-                            "No solar production (available_w=%.1f W) and already at min_current=%sA – skipping write",
+                            "EV Solar Manager: no solar surplus (available_w=%.1f W) and already at min_current=%sA – skipping write",
                             available_w, self.min_current,
                         )
                         return
@@ -636,21 +646,25 @@ class EVSolarController:
             _LOGGER.exception("Unexpected error in _compute_and_apply: %s", ex)
 
     async def _maybe_set_current(self, amps: int, reason: str) -> None:
-        """Write the new current to the charger only if the change is large enough."""
+        """Write the new current to the charger only if the change is large enough.
+
+        Delta suppression is bypassed when the reason is one of:
+          startup, charging_started, stop_on_no_injection_toggle, manual_trigger
+        This ensures explicit user actions (button press, toggle) always apply.
+        """
+        _BYPASS_DELTA = {"startup", "charging_started", "stop_on_no_injection_toggle", "manual_trigger"}
         if (
             self._last_set_current is not None
             and abs(amps - self._last_set_current) < self.min_delta_amp
-            and reason != "startup"
-            and reason != "charging_started"
-            and reason != "stop_on_no_injection_toggle"
+            and reason not in _BYPASS_DELTA
         ):
             _LOGGER.debug(
-                "Skipping update – delta too small: last=%sA new=%sA reason=%s",
+                "EV Solar Manager: skipping update – delta too small: last=%sA new=%sA reason=%s",
                 self._last_set_current, amps, reason,
             )
             return
 
-        _LOGGER.info("Setting charging current to %s A (reason: %s)", amps, reason)
+        _LOGGER.info("EV Solar Manager: setting charging current to %sA (reason: %s)", amps, reason)
         await self.hass.services.async_call(
             "number",
             "set_value",

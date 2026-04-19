@@ -32,7 +32,7 @@ All entities share a single HA device via `ev_solar_device_info()` in `device.py
 - **Event-driven timer**: When `charger_status_entity` is set, the recalculation timer runs *only* while the charger is in `charging_state`. Otherwise falls back to always-on timer. This avoids API noise when unplugged.
 - **Two timers**: `_unsub_timer` (active charging) and `_unsub_recovery_timer` (waiting for solar to return after stop-on-no-injection). Both are idempotent – call `_start_timer()` / `_stop_timer()` freely.
 - **`_stopped_by_us` flag**: Distinguishes our stop press from user/charger-initiated stops. Only when this is `True` does the recovery timer restart charging.
-- **`min_delta_amp` suppression**: `_maybe_set_current()` skips writes smaller than this threshold, except on `startup`, `charging_started`, and `stop_on_no_injection_toggle` reasons.
+- **`min_delta_amp` suppression**: `_maybe_set_current()` skips writes smaller than this threshold, except for reasons: `startup`, `charging_started`, `stop_on_no_injection_toggle`, `manual_trigger`. This ensures explicit user actions always apply immediately.
 - **Charger compensation formula**: `available_w = signed_export_w + charger_consumption_w - safety_margin_w`. Real sensor preferred over estimate (`last_set_amps × V × phases`).
 
 ## File Map

@@ -1,4 +1,2 @@
-﻿{
-  "services": {}
-}
-
+﻿# No custom services defined for EV Solar Manager.
+# All actions are performed via entity services (switch, number, button).

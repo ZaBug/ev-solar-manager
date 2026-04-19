@@ -6,7 +6,7 @@ when the override switch is turned ON.
 
 from __future__ import annotations
 
-from homeassistant.components.number import NumberEntity
+from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -33,6 +33,7 @@ class EVSolarOverrideNumber(NumberEntity):
     _attr_has_entity_name = True
     _attr_name = "Override Current"
     _attr_icon = "mdi:current-ac"
+    _attr_mode = NumberMode.BOX
     _attr_native_step = 1
     _attr_native_unit_of_measurement = "A"
 

@@ -1,4 +1,4 @@
-"""Override switch entity for EV Solar Manager."""
+"""Override and stop-on-no-injection switch entities for EV Solar Manager."""
 
 from __future__ import annotations
 
