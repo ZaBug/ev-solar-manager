@@ -32,6 +32,69 @@ you need full-speed charging regardless of solar production.
                                           └──────────────────────────────────────┘
 ```
 
+### Logic flow diagram
+
+```mermaid
+flowchart TD
+    START([HA Start / Reload]) --> HAS_STATUS{charger_status_entity\nconfigured?}
+
+    HAS_STATUS -- No --> ALWAYS_ON[Always-on timer\n_is_charging = True]
+    ALWAYS_ON --> TICK
+
+    HAS_STATUS -- Yes --> WATCH[Watch charger\nstatus sensor]
+    WATCH --> STATUS_CHG{Status change?}
+
+    STATUS_CHG -- charging_state\ne.g. Charging --> START_TIMER[Start recalc timer\n_is_charging = True\n_stopped_by_us = False]
+    START_TIMER --> TICK
+
+    STATUS_CHG -- stopped_state AND\n_stopped_by_us=True --> REC_TIMER[Start recovery timer\n_is_charging = False]
+    REC_TIMER --> REC_TICK
+
+    STATUS_CHG -- any other state\nFinished / Disconnected --> IDLE([Timers stopped\nWaiting...])
+
+    TICK([Every update_interval\nseconds]) --> OVERRIDE{Override\nswitch ON?}
+
+    OVERRIDE -- Yes --> SET_OVERRIDE[Set override_current\nto charger] --> DONE([Done])
+
+    OVERRIDE -- No --> READ[Read sensors:\ngrid_power_w\ngrid_voltage_v\ncharger_power_w]
+
+    READ --> CALC["available_w =\nsigned_export_w\n+ charger_load_w\n- safety_margin_w"]
+
+    CALC --> THRESH{"available_w <\nmin_current × V × phases\n(min_surplus_w)?"}
+
+    THRESH -- Yes, stop_on_no_injection=ON\nAND button configured --> STOPPED_US{_stopped_by_us\nalready?}
+    STOPPED_US -- No --> PRESS_STOP[Press stop button\n_stopped_by_us = True]
+    PRESS_STOP --> STATUS_CHG
+    STOPPED_US -- Yes --> DONE2([Skip - already stopped])
+
+    THRESH -- Yes, no button\nOR switch OFF --> SET_MIN[Set min_current\nto charger]
+    SET_MIN --> DONE3([Done])
+
+    THRESH -- No → surplus OK --> CALC_A["amps = round(available_w\n/ V × phases)\nclamp to min…max"]
+    CALC_A --> DELTA{"Change ≥\nmin_delta_amp?\nor bypass reason?"}
+    DELTA -- No --> SKIP([Skip write])
+    DELTA -- Yes --> WRITE[Write amps to\ntarget_number entity]
+    WRITE --> SENSOR[Push computed\ncurrent sensor]
+
+    REC_TICK([Recovery timer tick]) --> STILL_STOPPED{Charger still\nin stopped_state?}
+    STILL_STOPPED -- No --> CANCEL_REC[Cancel recovery timer\n_stopped_by_us = False]
+    STILL_STOPPED -- Yes --> READ_REC[Read sensors]
+    READ_REC --> REC_THRESH{"available_w ≥\nmin_surplus_w?"}
+    REC_THRESH -- No --> WAIT([Wait next tick])
+    REC_THRESH -- Yes --> PRESS_START[Press start button\nStop recovery timer]
+    PRESS_START --> STATUS_CHG
+
+    style START fill:#4CAF50,color:#fff
+    style IDLE fill:#9E9E9E,color:#fff
+    style PRESS_STOP fill:#F44336,color:#fff
+    style PRESS_START fill:#4CAF50,color:#fff
+    style WRITE fill:#2196F3,color:#fff
+    style SET_OVERRIDE fill:#FF9800,color:#fff
+    style SET_MIN fill:#FF9800,color:#fff
+    style THRESH fill:#FFF9C4
+    style REC_THRESH fill:#FFF9C4
+```
+
 1. Every `update_interval` seconds the controller reads the **grid power sensor**.
 2. It compensates for the EV charger's own consumption (which is already embedded
    in the grid meter reading) to find the true available solar budget:
