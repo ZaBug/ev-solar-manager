@@ -56,6 +56,11 @@ All entities share a single HA device via `ev_solar_device_info()` in `device.py
 2. Parse in `async_setup_entry()` in `__init__.py` and pass to `EVSolarController.__init__`.
 3. If surfaced as an entity, add the entity file and register the platform in `PLATFORMS`.
 
+> **Important:** `async_setup()` compares the current YAML with the stored config entry and
+> calls `async_update_entry()` + `async_reload()` if they differ. This means YAML changes
+> are picked up automatically on the next HA restart or integration reload — no need to
+> delete the config entry manually.
+
 ## Adding New Entities
 
 - Every entity class must call `ev_solar_device_info()` for `device_info` to stay grouped under the shared device.
