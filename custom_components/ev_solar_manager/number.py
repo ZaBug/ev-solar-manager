@@ -31,6 +31,7 @@ class EVSolarOverrideNumber(NumberEntity):
     """Number entity to set the manual override charging current (Amperes)."""
 
     _attr_has_entity_name = True
+    _attr_should_poll = False
     _attr_name = "Override Current"
     _attr_icon = "mdi:current-ac"
     _attr_mode = NumberMode.BOX
@@ -51,7 +52,7 @@ class EVSolarOverrideNumber(NumberEntity):
     @property
     def native_value(self) -> float | None:
         """Return the currently configured override current."""
-        return float(self._controller._override_current)  # type: ignore[attr-defined]
+        return float(self._controller.override_current_amps)
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the override current value in the controller."""
