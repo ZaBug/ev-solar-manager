@@ -32,67 +32,85 @@ you need full-speed charging regardless of solar production.
                                           └──────────────────────────────────────┘
 ```
 
-### Logic flow diagram
+### Diagram 1 – Startup & timer lifecycle
+
+Decides which timer mode to use based on configuration, and reacts to charger state changes.
 
 ```mermaid
 flowchart TD
     START([HA Start / Reload]) --> HAS_STATUS{charger_status_entity\nconfigured?}
 
-    HAS_STATUS -- No --> ALWAYS_ON[Always-on timer\n_is_charging = True]
-    ALWAYS_ON --> TICK
+    HAS_STATUS -- No --> ALWAYS_ON[Always-on recalc timer\n_is_charging = True]
+    HAS_STATUS -- Yes --> WATCH[Watch charger status sensor]
 
-    HAS_STATUS -- Yes --> WATCH[Watch charger\nstatus sensor]
-    WATCH --> STATUS_CHG{Status change?}
+    WATCH --> STATUS_CHG{Charger state change}
 
-    STATUS_CHG -- charging_state\ne.g. Charging --> START_TIMER[Start recalc timer\n_is_charging = True\n_stopped_by_us = False]
-    START_TIMER --> TICK
-
-    STATUS_CHG -- stopped_state AND\n_stopped_by_us=True --> REC_TIMER[Start recovery timer\n_is_charging = False]
-    REC_TIMER --> REC_TICK
-
-    STATUS_CHG -- any other state\nFinished / Disconnected --> IDLE([Timers stopped\nWaiting...])
-
-    TICK([Every update_interval\nseconds]) --> OVERRIDE{Override\nswitch ON?}
-
-    OVERRIDE -- Yes --> SET_OVERRIDE[Set override_current\nto charger] --> DONE([Done])
-
-    OVERRIDE -- No --> READ[Read sensors:\ngrid_power_w\ngrid_voltage_v\ncharger_power_w]
-
-    READ --> CALC["available_w =\nsigned_export_w\n+ charger_load_w\n- safety_margin_w"]
-
-    CALC --> THRESH{"available_w <\nmin_current × V × phases\n(min_surplus_w)?"}
-
-    THRESH -- Yes, stop_on_no_injection=ON\nAND button configured --> STOPPED_US{_stopped_by_us\nalready?}
-    STOPPED_US -- No --> PRESS_STOP[Press stop button\n_stopped_by_us = True]
-    PRESS_STOP --> STATUS_CHG
-    STOPPED_US -- Yes --> DONE2([Skip - already stopped])
-
-    THRESH -- Yes, no button\nOR switch OFF --> SET_MIN[Set min_current\nto charger]
-    SET_MIN --> DONE3([Done])
-
-    THRESH -- No → surplus OK --> CALC_A["amps = round(available_w\n/ V × phases)\nclamp to min…max"]
-    CALC_A --> DELTA{"Change ≥\nmin_delta_amp?\nor bypass reason?"}
-    DELTA -- No --> SKIP([Skip write])
-    DELTA -- Yes --> WRITE[Write amps to\ntarget_number entity]
-    WRITE --> SENSOR[Push computed\ncurrent sensor]
-
-    REC_TICK([Recovery timer tick]) --> STILL_STOPPED{Charger still\nin stopped_state?}
-    STILL_STOPPED -- No --> CANCEL_REC[Cancel recovery timer\n_stopped_by_us = False]
-    STILL_STOPPED -- Yes --> READ_REC[Read sensors]
-    READ_REC --> REC_THRESH{"available_w ≥\nmin_surplus_w?"}
-    REC_THRESH -- No --> WAIT([Wait next tick])
-    REC_THRESH -- Yes --> PRESS_START[Press start button\nStop recovery timer]
-    PRESS_START --> STATUS_CHG
+    STATUS_CHG -- charging_state --> START_TIMER[Start recalc timer\n_is_charging = True\n_stopped_by_us = False]
+    STATUS_CHG -- stopped_state AND _stopped_by_us=True --> REC_TIMER[Start recovery timer\n_is_charging = False]
+    STATUS_CHG -- other state\nFinished / Disconnected --> IDLE([Timers stopped — waiting])
 
     style START fill:#4CAF50,color:#fff
     style IDLE fill:#9E9E9E,color:#fff
+    style REC_TIMER fill:#FF9800,color:#fff
+```
+
+---
+
+### Diagram 2 – Recalculation tick
+
+Runs every `update_interval` seconds while the charger is active (or always, if no status entity is configured).
+
+```mermaid
+flowchart TD
+    TICK([Recalc timer tick]) --> OVERRIDE{Override switch ON?}
+
+    OVERRIDE -- Yes --> SET_OVERRIDE[Write override_current\nto charger] --> END([Done])
+
+    OVERRIDE -- No --> READ[Read sensors:\ngrid_power_w · grid_voltage_v · charger_power_w]
+    READ --> CALC["available_w = signed_export_w + charger_load_w − safety_margin_w"]
+
+    CALC --> THRESH{"available_w < min_surplus_w?\n(min_current × V × phases)"}
+
+    THRESH -- No: surplus OK --> CALC_A["amps = round(available_w / V × phases)\nclamp to min_current … max_current"]
+    CALC_A --> DELTA{"Change ≥ min_delta_amp?\nor bypass reason?"}
+    DELTA -- No --> SKIP([Skip — change too small])
+    DELTA -- Yes --> WRITE[Write amps to target_number]
+    WRITE --> SENSOR[Push computed current sensor]
+
+    THRESH -- Yes AND stop_on_no_injection=ON\nAND button configured --> ALREADY{_stopped_by_us\nalready True?}
+    ALREADY -- Yes --> SKIP2([Skip — already stopped])
+    ALREADY -- No --> PRESS_STOP[Press stop button\n_stopped_by_us = True]
+
+    THRESH -- Yes AND no button\nOR switch OFF --> SET_MIN[Write min_current\nto charger]
+
+    style TICK fill:#2196F3,color:#fff
     style PRESS_STOP fill:#F44336,color:#fff
-    style PRESS_START fill:#4CAF50,color:#fff
-    style WRITE fill:#2196F3,color:#fff
     style SET_OVERRIDE fill:#FF9800,color:#fff
     style SET_MIN fill:#FF9800,color:#fff
-    style THRESH fill:#FFF9C4
-    style REC_THRESH fill:#FFF9C4
+    style WRITE fill:#2196F3,color:#fff
+```
+
+---
+
+### Diagram 3 – Recovery timer
+
+Polls every `update_interval` seconds after the controller stopped the charger, waiting for enough solar surplus to restart.
+
+```mermaid
+flowchart TD
+    REC([Recovery timer tick]) --> STILL{"Charger still\nin stopped_state?"}
+
+    STILL -- No: user/charger changed state --> CANCEL[Cancel recovery timer\n_stopped_by_us = False]
+
+    STILL -- Yes --> READ[Read sensors]
+    READ --> THRESH{"available_w ≥ min_surplus_w?"}
+
+    THRESH -- No --> WAIT([Wait for next tick])
+    THRESH -- Yes --> PRESS_START[Press start button\nCancel recovery timer]
+
+    style REC fill:#FF9800,color:#fff
+    style PRESS_START fill:#4CAF50,color:#fff
+    style CANCEL fill:#9E9E9E,color:#fff
 ```
 
 1. Every `update_interval` seconds the controller reads the **grid power sensor**.

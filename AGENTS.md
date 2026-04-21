@@ -82,6 +82,24 @@ All log lines are prefixed `EV Solar Manager:`. Debug lines include `power_w`, `
 
 Update `version` in **both** `manifest.json` and `INTEGRATION_VERSION` in `const.py` – they must stay in sync.
 
+## Git Workflow
+
+Always commit and push using the **local repository git identity**, not any global or enterprise git config. Before committing, verify the active identity:
+
+```bash
+git config user.name
+git config user.email
+```
+
+If these return an enterprise identity, override locally for this repo:
+
+```bash
+git config --local user.name "YourGitHubUsername"
+git config --local user.email "your-github@email.com"
+```
+
+This ensures commits are attributed to the correct personal GitHub account, not a corporate SSO identity.
+
 ## Important Constraints
 
 - Requires Home Assistant **2024.1+** (`homeassistant.helpers.device_registry.DeviceInfo` API).
