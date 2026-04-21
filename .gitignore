@@ -7,4 +7,7 @@
 .idea/
 *.iml
 
+# Claude Code local config
+.claude/
+
 
