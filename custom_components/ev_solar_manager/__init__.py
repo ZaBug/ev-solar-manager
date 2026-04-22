@@ -557,6 +557,18 @@ class EVSolarController:
         self._override_current = max(self.min_current, min(self.max_current, int(amps)))
         self.hass.async_create_task(self._compute_and_apply("override_value"))
 
+    @property
+    def override_enabled(self) -> bool:
+        return self._override_enabled
+
+    @property
+    def stop_on_no_injection(self) -> bool:
+        return self._stop_on_no_injection
+
+    @property
+    def override_current_amps(self) -> int:
+        return self._override_current
+
     def get_computed_current(self) -> int:
         """Return the last computed (solar-based) current in Amperes."""
         return self._computed_current
@@ -604,15 +616,21 @@ class EVSolarController:
             if not power_state or not voltage_state:
                 _LOGGER.debug("EV Solar Manager: skipping calculation – source entities not yet available")
                 return
+            if power_state.state in ("unavailable", "unknown") or voltage_state.state in ("unavailable", "unknown"):
+                _LOGGER.debug(
+                    "EV Solar Manager: skipping calculation – power=%s voltage=%s",
+                    power_state.state, voltage_state.state,
+                )
+                return
 
             try:
                 power_w = float(power_state.state)
             except (ValueError, TypeError):
                 _LOGGER.warning(
-                    "EV Solar Manager: cannot parse power state '%s', defaulting to 0 W",
+                    "EV Solar Manager: cannot parse power state '%s', skipping",
                     power_state.state,
                 )
-                power_w = 0.0
+                return
 
             try:
                 voltage_v = float(voltage_state.state)
@@ -626,25 +644,18 @@ class EVSolarController:
             # --- Determine net grid power direction ---
             # export_is_negative=True  → sensor is negative when exporting (bidirectional meter)
             # export_is_negative=False → sensor is positive when exporting (production sensor)
-            if self.export_is_negative:
-                signed_export_w = -power_w  # positive = exporting, negative = importing
-            else:
-                signed_export_w = power_w
+            signed_export_w = -power_w if self.export_is_negative else power_w
 
             # --- Compensate for EV charger load already embedded in the meter reading ---
             # grid_meter = solar - house - ev_charger  (net)
             # available  = grid_meter_export + ev_charger  (gross solar budget)
             # Priority: 1. real charger sensor  2. estimate from last set current
-            charger_consumption_w = 0.0
             if self.charger_power_entity:
-                charger_state = self.hass.states.get(self.charger_power_entity)
-                if charger_state:
-                    try:
-                        charger_consumption_w = float(charger_state.state)
-                    except (ValueError, TypeError):
-                        charger_consumption_w = 0.0
+                charger_consumption_w = self._read_charger_consumption_w()
             elif self._last_set_current is not None and voltage_v > 0:
                 charger_consumption_w = self._last_set_current * voltage_v * self.phases
+            else:
+                charger_consumption_w = 0.0
 
             available_w = signed_export_w + charger_consumption_w - self.safety_margin_w
 
@@ -750,6 +761,18 @@ class EVSolarController:
             blocking=True,
         )
 
+    def _read_charger_consumption_w(self) -> float:
+        """Return the charger's current power draw in Watts, or 0.0 if unavailable."""
+        if not self.charger_power_entity:
+            return 0.0
+        state = self.hass.states.get(self.charger_power_entity)
+        if state and state.state not in ("unavailable", "unknown"):
+            try:
+                return float(state.state)
+            except (ValueError, TypeError):
+                pass
+        return 0.0
+
     def _read_available_w(self) -> Optional[float]:
         """Read power/voltage sensors and return net available solar surplus watts.
 
@@ -775,16 +798,4 @@ class EVSolarController:
             return None
 
         signed_export_w = -power_w if self.export_is_negative else power_w
-
-        # When charger is stopped we have no real load, but include charger_power_entity
-        # reading if available (should be 0 W while stopped anyway).
-        charger_consumption_w = 0.0
-        if self.charger_power_entity:
-            charger_state = self.hass.states.get(self.charger_power_entity)
-            if charger_state:
-                try:
-                    charger_consumption_w = float(charger_state.state)
-                except (ValueError, TypeError):
-                    charger_consumption_w = 0.0
-
-        return signed_export_w + charger_consumption_w - self.safety_margin_w
+        return signed_export_w + self._read_charger_consumption_w() - self.safety_margin_w
