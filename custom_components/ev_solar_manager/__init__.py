@@ -393,6 +393,10 @@ class EVSolarController:
             self._unsub_status_listener()
             self._unsub_status_listener = None
 
+    async def async_force_recalculate(self) -> None:
+        """Trigger an immediate recalculation (called by the Recalculate Now button)."""
+        await self._compute_and_apply("manual_trigger")
+
     # ------------------------------------------------------------------
     # Timer management
     # ------------------------------------------------------------------
