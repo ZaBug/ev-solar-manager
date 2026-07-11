@@ -40,7 +40,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
-from typing import Optional
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
@@ -259,11 +258,11 @@ class EVSolarController:
         update_interval: int,
         export_is_negative: bool = True,
         phases: int = 1,
-        charger_power_entity: Optional[str] = None,
+        charger_power_entity: str | None = None,
         safety_margin_w: float = 0.0,
-        charger_status_entity: Optional[str] = None,
+        charger_status_entity: str | None = None,
         charging_state: str = "Charging",
-        charger_start_stop_button: Optional[str] = None,
+        charger_start_stop_button: str | None = None,
         stopped_state: str = "Stopped",
     ) -> None:
         self.hass = hass
@@ -286,7 +285,7 @@ class EVSolarController:
         self._unsub_timer = None
         self._unsub_recovery_timer = None
         self._unsub_status_listener = None
-        self._last_set_current: Optional[int] = None
+        self._last_set_current: int | None = None
         self._override_enabled: bool = False
         self._override_current: int = min_current
         self._computed_current: int = 0
@@ -791,7 +790,7 @@ class EVSolarController:
                 pass
         return 0.0
 
-    def _read_available_w(self) -> Optional[float]:
+    def _read_available_w(self) -> float | None:
         """Read power/voltage sensors and return net available solar surplus watts.
 
         Returns None if any sensor is unavailable or unreadable.
