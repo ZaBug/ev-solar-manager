@@ -41,6 +41,10 @@ class EVSolarOverrideSwitch(SwitchEntity):
         self._controller = controller
 
     @property
+    def available(self) -> bool:
+        return self._controller._available
+
+    @property
     def is_on(self) -> bool:
         return self._controller.override_enabled
 
@@ -73,6 +77,10 @@ class EVSolarStopOnNoInjectionSwitch(SwitchEntity):
 
     def __init__(self, controller) -> None:
         self._controller = controller
+
+    @property
+    def available(self) -> bool:
+        return self._controller._available
 
     @property
     def is_on(self) -> bool:

@@ -40,13 +40,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
-from typing import Optional
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.helpers.event import async_track_time_interval, async_track_state_change_event
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.helpers import discovery
 from homeassistant.config_entries import ConfigEntry
 
 from .const import (
@@ -80,6 +78,10 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["switch", "number", "sensor", "button"]
+
+_BYPASS_DELTA: frozenset[str] = frozenset({
+    "startup", "charging_started", "stop_on_no_injection_toggle", "manual_trigger"
+})
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -189,7 +191,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _handle_stop(_event):
         await controller.async_stop()
 
-    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _handle_stop)
+    hass.data[DOMAIN]["cancel_stop"] = hass.bus.async_listen_once(
+        EVENT_HOMEASSISTANT_STOP, _handle_stop
+    )
 
     # Load platforms – they will pick up device_info from the config entry
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -199,7 +203,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    controller = hass.data.get(DOMAIN, {}).get("controller")
+    domain_data = hass.data.get(DOMAIN, {})
+
+    cancel_stop = domain_data.get("cancel_stop")
+    if cancel_stop:
+        cancel_stop()
+
+    controller = domain_data.get("controller")
     if controller:
         await controller.async_stop()
 
@@ -248,11 +258,11 @@ class EVSolarController:
         update_interval: int,
         export_is_negative: bool = True,
         phases: int = 1,
-        charger_power_entity: Optional[str] = None,
+        charger_power_entity: str | None = None,
         safety_margin_w: float = 0.0,
-        charger_status_entity: Optional[str] = None,
+        charger_status_entity: str | None = None,
         charging_state: str = "Charging",
-        charger_start_stop_button: Optional[str] = None,
+        charger_start_stop_button: str | None = None,
         stopped_state: str = "Stopped",
     ) -> None:
         self.hass = hass
@@ -275,7 +285,7 @@ class EVSolarController:
         self._unsub_timer = None
         self._unsub_recovery_timer = None
         self._unsub_status_listener = None
-        self._last_set_current: Optional[int] = None
+        self._last_set_current: int | None = None
         self._override_enabled: bool = False
         self._override_current: int = min_current
         self._computed_current: int = 0
@@ -283,6 +293,7 @@ class EVSolarController:
         self._is_charging: bool = False   # charger is in charging_state
         self._stop_on_no_injection: bool = True   # stop charger when no solar surplus
         self._stopped_by_us: bool = False          # True when we pressed stop due to no surplus
+        self._available: bool = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -298,6 +309,8 @@ class EVSolarController:
         Else:
           - Start the timer unconditionally (legacy behaviour)
         """
+        self._available = True
+
         if self.charger_status_entity:
             # Watch for charging state transitions
             self._unsub_status_listener = async_track_state_change_event(
@@ -376,11 +389,16 @@ class EVSolarController:
 
     async def async_stop(self) -> None:
         """Cancel timers and all listeners on shutdown."""
+        self._available = False
         self._stop_timer()
         self._stop_recovery_timer()
         if self._unsub_status_listener:
             self._unsub_status_listener()
             self._unsub_status_listener = None
+
+    async def async_force_recalculate(self) -> None:
+        """Trigger an immediate recalculation (called by the Recalculate Now button)."""
+        await self._compute_and_apply("manual_trigger")
 
     # ------------------------------------------------------------------
     # Timer management
@@ -727,7 +745,6 @@ class EVSolarController:
           startup, charging_started, stop_on_no_injection_toggle, manual_trigger
         This ensures explicit user actions (button press, toggle) always apply.
         """
-        _BYPASS_DELTA = {"startup", "charging_started", "stop_on_no_injection_toggle", "manual_trigger"}
         if (
             self._last_set_current is not None
             and abs(amps - self._last_set_current) < self.min_delta_amp
@@ -773,7 +790,7 @@ class EVSolarController:
                 pass
         return 0.0
 
-    def _read_available_w(self) -> Optional[float]:
+    def _read_available_w(self) -> float | None:
         """Read power/voltage sensors and return net available solar surplus watts.
 
         Returns None if any sensor is unavailable or unreadable.

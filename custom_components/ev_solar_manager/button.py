@@ -34,6 +34,10 @@ class EVSolarRecalcButton(ButtonEntity):
         self._controller = controller
 
     @property
+    def available(self) -> bool:
+        return self._controller._available
+
+    @property
     def unique_id(self) -> str:
         return f"{DOMAIN}_recalculate_button"
 
@@ -43,4 +47,4 @@ class EVSolarRecalcButton(ButtonEntity):
 
     async def async_press(self) -> None:
         """Trigger an immediate recalculation when the button is pressed."""
-        await self._controller._compute_and_apply("manual_trigger")
+        await self._controller.async_force_recalculate()

@@ -54,6 +54,10 @@ class EVSolarComputedCurrentSensor(SensorEntity):
         self._controller.register_sensor(None)
 
     @property
+    def available(self) -> bool:
+        return self._controller._available
+
+    @property
     def native_value(self):
         """Return the last computed charging current in Amperes."""
         return self._controller.get_computed_current()

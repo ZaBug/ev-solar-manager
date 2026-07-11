@@ -7,7 +7,9 @@
 .idea/
 *.iml
 
-# Claude Code local config
-.claude/
+# Claude Code — ignore only local/personal config, track shared agents
+.claude/settings.local.json
+.claude/worktrees/
+.claude/todos/
 
 
