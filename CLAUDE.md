@@ -79,3 +79,16 @@ See `AGENTS.md` for the full branching strategy. Key points:
 - Use the local repo git identity (`ZaBug`), not any global enterprise config
 - Conventional commit prefixes: `feat:`, `fix:`, `refactor:`, `chore:`, `docs:`
 - Version bump commits use the tag format: `(v1.x.y)` in the message
+- **No co-author lines in commits** — sole author is `ZaBug`. Never add `Co-Authored-By:` trailers.
+
+## HA Integration Quality Rules
+
+Lessons from the v1.3.x code review — apply to all future changes:
+
+- **Listener lifecycle**: every `async_listen_once` / `async_track_*` call returns an unsubscribe callable. Store it and cancel it in `async_unload_entry`. Leaked listeners accumulate across reloads.
+- **Public API on controller**: entities must never call private `_methods` on the controller. Add a public method instead.
+- **`available` property**: every entity must implement `available` and return `False` when the controller is stopped/unloaded.
+- **Module-level constants**: sets/frozensets used inside hot paths (timer callbacks) belong at module level, not inside the function.
+- **Type hints**: use `str | None` not `Optional[str]`; no `from typing import Optional` needed on Python 3.12+.
+- **`suggested_area`**: never hardcode it in `DeviceInfo` — it overwrites the user's own area assignment.
+- **Test infrastructure**: shared stubs live in `tests/conftest.py`. Never duplicate `FakeHass` / `make_controller` across test files. Use `asyncio.get_running_loop()`, not the deprecated `asyncio.get_event_loop()`.
