@@ -189,7 +189,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _handle_stop(_event):
         await controller.async_stop()
 
-    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _handle_stop)
+    hass.data[DOMAIN]["cancel_stop"] = hass.bus.async_listen_once(
+        EVENT_HOMEASSISTANT_STOP, _handle_stop
+    )
 
     # Load platforms – they will pick up device_info from the config entry
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -199,7 +201,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    controller = hass.data.get(DOMAIN, {}).get("controller")
+    domain_data = hass.data.get(DOMAIN, {})
+
+    cancel_stop = domain_data.get("cancel_stop")
+    if cancel_stop:
+        cancel_stop()
+
+    controller = domain_data.get("controller")
     if controller:
         await controller.async_stop()
 
