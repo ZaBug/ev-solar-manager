@@ -33,6 +33,7 @@ class EVSolarOverrideSwitch(SwitchEntity):
     """Switch that activates manual override mode."""
 
     _attr_has_entity_name = True
+    _attr_should_poll = False
     _attr_name = "Override"
     _attr_icon = "mdi:hand-back-right"
 
@@ -41,7 +42,7 @@ class EVSolarOverrideSwitch(SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        return self._controller._override_enabled  # type: ignore[attr-defined]
+        return self._controller.override_enabled
 
     @property
     def unique_id(self) -> str:
@@ -66,6 +67,7 @@ class EVSolarStopOnNoInjectionSwitch(SwitchEntity):
     """Switch that controls whether charging stops when there is no solar surplus."""
 
     _attr_has_entity_name = True
+    _attr_should_poll = False
     _attr_name = "Stop When No Solar Surplus"
     _attr_icon = "mdi:solar-power-variant"
 
@@ -74,7 +76,7 @@ class EVSolarStopOnNoInjectionSwitch(SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        return self._controller._stop_on_no_injection  # type: ignore[attr-defined]
+        return self._controller.stop_on_no_injection
 
     @property
     def unique_id(self) -> str:
