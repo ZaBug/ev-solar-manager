@@ -34,6 +34,10 @@ class EVSolarRecalcButton(ButtonEntity):
         self._controller = controller
 
     @property
+    def available(self) -> bool:
+        return self._controller._available
+
+    @property
     def unique_id(self) -> str:
         return f"{DOMAIN}_recalculate_button"
 

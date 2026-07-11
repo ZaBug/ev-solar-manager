@@ -294,6 +294,7 @@ class EVSolarController:
         self._is_charging: bool = False   # charger is in charging_state
         self._stop_on_no_injection: bool = True   # stop charger when no solar surplus
         self._stopped_by_us: bool = False          # True when we pressed stop due to no surplus
+        self._available: bool = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -309,6 +310,8 @@ class EVSolarController:
         Else:
           - Start the timer unconditionally (legacy behaviour)
         """
+        self._available = True
+
         if self.charger_status_entity:
             # Watch for charging state transitions
             self._unsub_status_listener = async_track_state_change_event(
@@ -387,6 +390,7 @@ class EVSolarController:
 
     async def async_stop(self) -> None:
         """Cancel timers and all listeners on shutdown."""
+        self._available = False
         self._stop_timer()
         self._stop_recovery_timer()
         if self._unsub_status_listener:

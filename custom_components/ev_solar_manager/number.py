@@ -42,6 +42,10 @@ class EVSolarOverrideNumber(NumberEntity):
         self._controller = controller
 
     @property
+    def available(self) -> bool:
+        return self._controller._available
+
+    @property
     def native_min_value(self) -> float:
         return float(self._controller.min_current or DEFAULT_MIN_CURRENT)
 
