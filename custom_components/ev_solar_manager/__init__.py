@@ -46,7 +46,6 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.helpers.event import async_track_time_interval, async_track_state_change_event
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.helpers import discovery
 from homeassistant.config_entries import ConfigEntry
 
 from .const import (
@@ -80,6 +79,10 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["switch", "number", "sensor", "button"]
+
+_BYPASS_DELTA: frozenset[str] = frozenset({
+    "startup", "charging_started", "stop_on_no_injection_toggle", "manual_trigger"
+})
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -735,7 +738,6 @@ class EVSolarController:
           startup, charging_started, stop_on_no_injection_toggle, manual_trigger
         This ensures explicit user actions (button press, toggle) always apply.
         """
-        _BYPASS_DELTA = {"startup", "charging_started", "stop_on_no_injection_toggle", "manual_trigger"}
         if (
             self._last_set_current is not None
             and abs(amps - self._last_set_current) < self.min_delta_amp
