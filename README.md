@@ -47,6 +47,7 @@ flowchart TD
 
     STATUS_CHG -- charging_state --> START_TIMER[Start recalc timer\n_is_charging = True\n_stopped_by_us = False]
     STATUS_CHG -- stopped_state AND _stopped_by_us=True --> REC_TIMER[Start recovery timer\n_is_charging = False]
+    STATUS_CHG -- unavailable / unknown --> KEEP([Ignored — transient glitch,\nstate kept])
     STATUS_CHG -- other state\nFinished / Disconnected --> IDLE([Timers stopped — waiting])
 
     style START fill:#4CAF50,color:#fff
@@ -77,11 +78,14 @@ flowchart TD
     DELTA -- Yes --> WRITE[Write amps to target_number]
     WRITE --> SENSOR[Push computed current sensor]
 
-    THRESH -- Yes AND stop_on_no_injection=ON\nAND button configured --> ALREADY{_stopped_by_us\nalready True?}
-    ALREADY -- Yes --> SKIP2([Skip — already stopped])
-    ALREADY -- No --> PRESS_STOP[Press stop button\n_stopped_by_us = True]
+    THRESH -- Yes AND stop_on_no_injection=ON\nAND button configured --> LOW_FOR{"Low for ≥ stop_delay_s?"}
+    LOW_FOR -- No --> SET_MIN
+    LOW_FOR -- Yes --> CAN_PRESS{"Press allowed?\n(max 3, 5 min cooldown)"}
+    CAN_PRESS -- No --> SET_MIN
+    CAN_PRESS -- Yes --> PRESS_STOP[Press stop button\n_stopped_by_us = True on success]
+    PRESS_STOP --> SET_MIN
 
-    THRESH -- Yes AND no button\nOR switch OFF --> SET_MIN[Write min_current\nto charger]
+    THRESH -- Yes AND no button\nOR switch OFF --> SET_MIN[Hold min_current\non charger]
 
     style TICK fill:#2196F3,color:#fff
     style PRESS_STOP fill:#F44336,color:#fff
@@ -100,13 +104,19 @@ Polls every `update_interval` seconds after the controller stopped the charger, 
 flowchart TD
     REC([Recovery timer tick]) --> STILL{"Charger still\nin stopped_state?"}
 
+    STILL -- unavailable / unknown --> WAIT
     STILL -- No: user/charger changed state --> CANCEL[Cancel recovery timer\n_stopped_by_us = False]
 
     STILL -- Yes --> READ[Read sensors]
-    READ --> THRESH{"available_w ≥ min_surplus_w?"}
+    READ --> THRESH{"available_w ≥ min_surplus_w\n+ start_hysteresis_w?"}
 
     THRESH -- No --> WAIT([Wait for next tick])
-    THRESH -- Yes --> PRESS_START[Press start button\nCancel recovery timer]
+    THRESH -- Yes --> SUSTAINED{"Sustained for\n≥ start_delay_s?"}
+    SUSTAINED -- No --> WAIT
+    SUSTAINED -- Yes --> CAN_PRESS{"Press allowed?\n(max 3, 5 min cooldown)"}
+    CAN_PRESS -- No, waiting --> WAIT
+    CAN_PRESS -- No, 3 attempts used --> CANCEL
+    CAN_PRESS -- Yes --> PRESS_START[Press start button\nkeep polling until charging_state]
 
     style REC fill:#FF9800,color:#fff
     style PRESS_START fill:#4CAF50,color:#fff
@@ -128,9 +138,9 @@ flowchart TD
 4. The value is written to the charger entity **only** if the change is at least
    `min_delta_amp` Amperes — to avoid hammering the charger with tiny adjustments.
 5. If the available solar budget is **below the minimum viable threshold**
-   (`min_current × voltage × phases` watts), the controller stops the charger (if
-   `charger_start_stop_button` is configured) or falls back to `min_current` — it
-   will **not** silently draw the difference from the grid.
+   (`min_current × voltage × phases` watts), the controller drops to `min_current` and,
+   if the surplus stays low for `stop_delay_s` and `charger_start_stop_button` is
+   configured, stops the charger.
 
 ### Stop on no solar surplus
 
@@ -152,20 +162,32 @@ the grid even at its lowest allowed setting — so the controller stops it inste
 If another appliance (e.g. a washing machine) starts and reduces the solar export
 below 1 380 W — even if some solar is still going out — the charger is stopped.
 
-- Below threshold → controller presses the toggle button → charger stops.
-- A recovery timer polls every `update_interval` seconds. When surplus rises back
-  above `min_surplus_w`, the button is pressed again → charger resumes.
+- Below threshold → charger is held at `min_current`. If the surplus stays below the
+  threshold for `stop_delay_s` (default 120 s), the toggle button is pressed → charger stops.
+  A short dip (a cloud, a kettle) therefore does not stop charging.
+- A recovery timer polls every `update_interval` seconds. When the surplus stays above
+  `min_surplus_w + start_hysteresis_w` (default +200 W) for `start_delay_s` (default 120 s),
+  the button is pressed again → charger resumes. The gap between the stop and restart
+  thresholds prevents the charger from toggling every minute around the threshold.
+- If the charger does not confirm the new state, the press is retried after 5 minutes,
+  at most 3 times in total (the button is a toggle, so faster retries could undo the press).
 - If the car is disconnected or the user stops charging manually, the recovery timer
   is cancelled automatically (only restarts when `_stopped_by_us` is `True`).
+- A transient `unavailable` / `unknown` charger status is ignored and does not reset this state.
 
+`charger_start_stop_button` requires `charger_status_entity`; without it the button is ignored.
 Without `charger_start_stop_button`, the charger falls back to staying at `min_current`
 when the surplus is below threshold (original behaviour).
+
+Set `stop_delay_s: 0`, `start_delay_s: 0` and `start_hysteresis_w: 0` to get the previous
+behaviour (immediate stop/start on a single reading).
 
 ### Override mode
 
 Turn on `switch.ev_solar_manager_override` to lock the charger to the current set
 in `number.ev_solar_manager_override_current`. Solar logic is paused until the
-switch is turned off again.
+switch is turned off again. If the controller had stopped the charger for lack of
+surplus, turning override on restarts it.
 
 ### Manual recalculation
 
@@ -254,6 +276,9 @@ ev_solar_manager:
   charging_state: "Charging"                     # optional: state value that means charging (default "Charging")
   charger_start_stop_button: button.duosida_start_stop_charging  # optional: toggle button
   stopped_state: "Stopped"                       # optional: state value that means stopped/waiting (default "Stopped")
+  start_hysteresis_w: 200   # extra surplus needed to restart after a stop (default: 200)
+  stop_delay_s: 120         # surplus must stay too low this long before stopping (default: 120)
+  start_delay_s: 120        # surplus must stay high enough this long before restarting (default: 120)
 ```
 
 ### Enable debug logging
@@ -284,8 +309,11 @@ logger:
 | `safety_margin_w` | ❌ | `0` | Watts to keep as buffer. Set to e.g. `100` to always inject ≥100 W to the grid and avoid accidental import. |
 | `charger_status_entity` | ❌ | — | Entity ID of the charger status sensor. When set, the recalculation timer runs only while the charger is in `charging_state`. |
 | `charging_state` | ❌ | `"Charging"` | State string that means the charger is actively charging. |
-| `charger_start_stop_button` | ❌ | — | Entity ID of the charger's start/stop toggle button. Enables automatic stop when no solar surplus and restart when surplus returns. |
+| `charger_start_stop_button` | ❌ | — | Entity ID of the charger's start/stop toggle button. Enables automatic stop when no solar surplus and restart when surplus returns. Requires `charger_status_entity`. |
 | `stopped_state` | ❌ | `"Stopped"` | State string that means the charger is stopped/waiting. Used to confirm the charger stopped after the button press. |
+| `start_hysteresis_w` | ❌ | `200` | Extra surplus (W) above the stop threshold required to restart. Prevents start/stop flapping. |
+| `stop_delay_s` | ❌ | `120` | Seconds the surplus must stay below the threshold before the charger is stopped (held at `min_current` meanwhile). |
+| `start_delay_s` | ❌ | `120` | Seconds the surplus must stay above the restart threshold before the charger is restarted. |
 
 ### How to determine `export_is_negative`
 

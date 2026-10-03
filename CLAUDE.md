@@ -41,7 +41,7 @@ When `charger_status_entity` is configured, a state-change listener starts/stops
 **Recalculation pipeline (each tick):**
 1. Read `power_entity` (grid export, W) and `voltage_entity` (V); optionally read `charger_power_entity`
 2. Compute `available_w = signed_export_w + charger_consumption_w - safety_margin_w`
-3. If `available_w < min_surplus_w`: press the charger stop button (sets `_stopped_by_us = True`) and arm the recovery timer
+3. If `available_w < min_surplus_w`: hold `min_current`; once it stays low for `stop_delay_s`, press the charger stop button (`_stopped_by_us = True` only on a successful press). The status listener then arms the recovery timer, which restarts once surplus ≥ `min_surplus_w + start_hysteresis_w` for `start_delay_s`. Button presses (toggle!) are retried after 5 min, max 3 attempts
 4. Otherwise: `amps = round(available_w / (V × phases))`, clamped to `[min_current, max_current]`
 5. Skip write if `|Δamps| < min_delta_amp` (suppresses noise), except for explicit user actions
 6. Write to `target_number` entity; push state to the computed-current sensor
@@ -49,6 +49,8 @@ When `charger_status_entity` is configured, a state-change listener starts/stops
 **Override mode:** When the `override` switch is ON, step 4 is skipped — `override_current` is written directly to the charger.
 
 **`_stopped_by_us` flag:** Distinguishes controller-initiated stops from external stops. Only when this is True does the controller arm a recovery timer; otherwise it stays idle.
+
+**Transient status:** charger status transitions to `unavailable` / `unknown` are ignored — they must never reset `_stopped_by_us` or the timers. The start/stop button is ignored when `charger_status_entity` is not configured (a toggle without status feedback is unsafe).
 
 ## Key Files
 

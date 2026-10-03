@@ -1,4 +1,4 @@
-﻿"""Shared device info helper for EV Solar Manager."""
+"""Shared device info helper for EV Solar Manager."""
 
 from __future__ import annotations
 

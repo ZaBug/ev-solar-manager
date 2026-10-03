@@ -116,12 +116,15 @@ async def test_already_stopped_does_not_double_press():
     }
     ctrl, hass, _ = make_controller(states)
     ctrl._is_charging = True
-    ctrl._stopped_by_us = True   # already stopped by us
+    # Stop was just pressed; charger still reports Charging until its status updates
+    ctrl._stopped_by_us = True
+    ctrl._press_attempts = 1
+    ctrl._last_press_at = ctrl._monotonic()
 
     await ctrl._compute_and_apply("timer")
 
     button_calls = [c for c in hass.services.calls if c["service"] == "press"]
-    assert len(button_calls) == 0, "Button must not be pressed twice"
+    assert len(button_calls) == 0, "Button must not be pressed twice within the retry cooldown"
 
 
 @pytest.mark.asyncio

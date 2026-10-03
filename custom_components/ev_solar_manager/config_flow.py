@@ -1,4 +1,4 @@
-﻿"""Config flow for EV Solar Manager.
+"""Config flow for EV Solar Manager.
 
 This integration is configured via YAML (configuration.yaml).
 The config flow exists only to create a config entry, which is required

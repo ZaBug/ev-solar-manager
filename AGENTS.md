@@ -1,4 +1,4 @@
-﻿# AGENTS.md – EV Solar Manager
+# AGENTS.md – EV Solar Manager
 
 ## Project Overview
 
@@ -32,9 +32,10 @@ All entities share a single HA device via `ev_solar_device_info()` in `device.py
 - **Event-driven timer**: When `charger_status_entity` is set, the recalculation timer runs *only* while the charger is in `charging_state`. Otherwise falls back to always-on timer. This avoids API noise when unplugged.
 - **Two timers**: `_unsub_timer` (active charging) and `_unsub_recovery_timer` (waiting for solar to return after stop-on-no-injection). Both are idempotent – call `_start_timer()` / `_stop_timer()` freely.
 - **`_stopped_by_us` flag**: Distinguishes our stop press from user/charger-initiated stops. Only when this is `True` does the recovery timer restart charging.
-- **`min_delta_amp` suppression**: `_maybe_set_current()` skips writes smaller than this threshold, except for reasons: `startup`, `charging_started`, `stop_on_no_injection_toggle`, `manual_trigger`. This ensures explicit user actions always apply immediately.
+- **Toggle button safety**: `charger_start_stop_button` is a toggle. It is only pressed when the status confirms the expected state, retried after a 5 min cooldown (max 3 attempts), and ignored entirely without `charger_status_entity`. Status transitions to `unavailable`/`unknown` are ignored.
+- **`min_delta_amp` suppression**: `_maybe_set_current()` skips writes smaller than this threshold, except for reasons: `startup`, `charging_started`, `stop_on_no_injection_toggle`, `manual_trigger`, `override_toggle`, `override_value` (`_BYPASS_DELTA`). This ensures explicit user actions always apply immediately.
 - **Charger compensation formula**: `available_w = signed_export_w + charger_consumption_w - safety_margin_w`. Real sensor preferred over estimate (`last_set_amps × V × phases`).
-- **Minimum-surplus threshold**: The controller stops (or falls back to `min_current`) when `available_w < min_current × voltage × phases`. This prevents silently drawing the deficit from the grid when other appliances (e.g. washing machine) reduce solar export below the IEC 61851 minimum of 6 A worth of watts. The recovery timer uses the same threshold to decide when to restart charging. The threshold is computed dynamically using the live voltage reading (falls back to 230 V if unavailable).
+- **Minimum-surplus threshold**: The controller stops (or falls back to `min_current`) when `available_w < min_current × voltage × phases`. This prevents silently drawing the deficit from the grid when other appliances (e.g. washing machine) reduce solar export below the IEC 61851 minimum of 6 A worth of watts. While below the threshold the charger is held at `min_current`; the stop button is pressed only after the surplus stays low for `stop_delay_s`. The recovery timer restarts charging once the surplus stays at or above `min_surplus_w + start_hysteresis_w` for `start_delay_s` (hysteresis + delays prevent start/stop flapping). The threshold is computed dynamically using the live voltage reading (falls back to 230 V if unavailable).
 
 ## File Map
 

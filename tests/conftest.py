@@ -23,13 +23,22 @@ class FakeStates:
         val = self._map.get(entity_id)
         return FakeState(str(val)) if val is not None else None
 
+    def set(self, entity_id: str, value) -> None:
+        self._map[entity_id] = value
+
 
 class FakeServices:
     def __init__(self):
         self.calls: list[dict] = []
+        self.failing: set[str] = set()   # service names that raise (e.g. {"press"})
 
     async def async_call(self, domain, service, data=None, blocking=False):
         self.calls.append({"domain": domain, "service": service, "data": data or {}})
+        if service in self.failing:
+            raise RuntimeError(f"{domain}.{service} failed")
+
+    def count(self, service: str) -> int:
+        return sum(1 for c in self.calls if c["service"] == service)
 
 
 class FakeHass:
@@ -54,8 +63,17 @@ def make_controller(
     stopped_state: str = "Stopped",
     export_is_negative: bool = True,
     safety_margin_w: float = 0.0,
+    min_delta_amp: int = 1,
+    charger_power_entity: str | None = None,
+    start_hysteresis_w: float = 0.0,
+    stop_delay_s: float = 0.0,
+    start_delay_s: float = 0.0,
 ):
     """Build an EVSolarController with HA module stubs, no real HA instance needed.
+
+    Anti-flapping defaults are 0 here (immediate stop/start) so threshold tests stay
+    focused; tests for hysteresis/delays pass explicit values.
+    The controller is marked available, as after async_start().
 
     Returns (controller, FakeHass, loaded_module).
     """
@@ -117,15 +135,20 @@ def make_controller(
         target_number="number.charger_current",
         min_current=min_current,
         max_current=max_current,
-        min_delta_amp=1,
+        min_delta_amp=min_delta_amp,
         update_interval=60,
         export_is_negative=export_is_negative,
         phases=phases,
         safety_margin_w=safety_margin_w,
+        charger_power_entity=charger_power_entity,
         charger_status_entity=charger_status_entity,
         charging_state=charging_state,
         charger_start_stop_button=charger_start_stop_button,
         stopped_state=stopped_state,
+        start_hysteresis_w=start_hysteresis_w,
+        stop_delay_s=stop_delay_s,
+        start_delay_s=start_delay_s,
     )
     ctrl._stop_on_no_injection = stop_on_no_injection
+    ctrl._available = True
     return ctrl, hass, mod
