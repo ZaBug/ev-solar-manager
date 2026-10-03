@@ -2,16 +2,14 @@
 
 Scenario
 --------
-When HA restarts while the EV charger is in stopped_state (e.g. we had stopped
-it due to low surplus, or the charger is simply waiting), the _stopped_by_us
-flag is lost from memory.
+When HA restarts while the EV charger is in stopped_state, the controller must
+resume charging only if WE had stopped it (lack of surplus). _stopped_by_us is
+persisted in HA storage and restored in async_start(); a stopped_state caused by
+the user or by a full car (often the same state string, e.g. "Finished") must
+not trigger an automatic start.
 
-Before the fix: the controller stayed idle forever – charging never resumed
-automatically; the user had to press the start button manually.
-
-After the fix: _delayed_startup_check() detects stopped_state at startup,
-sets _stopped_by_us=True and arms the recovery timer → charging resumes
-automatically once solar surplus reaches min_surplus_w.
+_delayed_startup_check() arms the recovery timer when the charger is in
+stopped_state AND the restored _stopped_by_us flag is True.
 
 Run with:
     python -m pytest tests/test_startup_recovery.py -v
@@ -32,13 +30,14 @@ from tests.conftest import make_controller
 
 @pytest.mark.asyncio
 async def test_startup_arms_recovery_when_charger_stopped():
-    """After HA restart with charger in stopped_state, recovery timer is armed."""
+    """After HA restart with charger stopped by us (restored flag), recovery timer is armed."""
     states = {
         "sensor.charger_status": "Stopped",
         "sensor.grid_power": -2000,
         "sensor.grid_voltage": 230,
     }
     ctrl, hass, _ = make_controller(states)
+    ctrl._stopped_by_us = True   # restored from storage: we had stopped it before the restart
 
     with mock.patch("asyncio.sleep", return_value=None):
         await ctrl._delayed_startup_check()
@@ -115,6 +114,7 @@ async def test_full_restart_flow_charger_restarts_with_surplus():
         "sensor.grid_voltage": 230,
     }
     ctrl, hass, _ = make_controller(states)
+    ctrl._stopped_by_us = True   # restored from storage: we had stopped it before the restart
 
     with mock.patch("asyncio.sleep", return_value=None):
         await ctrl._delayed_startup_check()
@@ -144,3 +144,54 @@ async def test_full_restart_flow_charger_waits_without_surplus():
 
     button_calls = [c for c in hass.services.calls if c["service"] == "press"]
     assert len(button_calls) == 0, "Start button must NOT be pressed when surplus is still too low"
+
+
+@pytest.mark.asyncio
+async def test_startup_stays_idle_when_stopped_not_by_us():
+    """Charger in stopped_state but not stopped by us (car full / manual stop) → no recovery."""
+    states = {
+        "sensor.charger_status": "Stopped",
+        "sensor.grid_power": -3000,
+        "sensor.grid_voltage": 230,
+    }
+    ctrl, hass, _ = make_controller(states)
+
+    with mock.patch("asyncio.sleep", return_value=None):
+        await ctrl._delayed_startup_check()
+
+    assert ctrl._stopped_by_us is False
+    assert ctrl._unsub_recovery_timer is None
+
+
+@pytest.mark.asyncio
+async def test_stopped_by_us_is_persisted_and_restored():
+    states = {
+        "sensor.charger_status": "Stopped",
+        "sensor.grid_power": -3000,
+        "sensor.grid_voltage": 230,
+    }
+    ctrl, hass, _ = make_controller(states)
+    ctrl._stopped_by_us = True
+    saved = ctrl._store.data
+    assert saved == {"stopped_by_us": True}
+
+    # Simulate a restart: new controller, same storage content
+    ctrl2, _, _ = make_controller(states)
+    ctrl2._store.data = saved
+    await ctrl2.async_start()
+    assert ctrl2._stopped_by_us is True
+    await ctrl2.async_stop()
+
+
+@pytest.mark.asyncio
+async def test_startup_clears_stale_flag_when_not_stopped():
+    """Restored flag but the charger is now Finished/disconnected → flag cleared, idle."""
+    states = {"sensor.charger_status": "Disconnected"}
+    ctrl, hass, _ = make_controller(states)
+    ctrl._stopped_by_us = True
+
+    with mock.patch("asyncio.sleep", return_value=None):
+        await ctrl._delayed_startup_check()
+
+    assert ctrl._stopped_by_us is False
+    assert ctrl._store.data == {"stopped_by_us": False}

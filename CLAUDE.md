@@ -39,16 +39,20 @@ The controller runs two async timers:
 When `charger_status_entity` is configured, a state-change listener starts/stops these timers based on the charger's state. Without it, the recalculation timer runs continuously (legacy mode).
 
 **Recalculation pipeline (each tick):**
-1. Read `power_entity` (grid export, W) and `voltage_entity` (V); optionally read `charger_power_entity`
+1. Read `power_entity` (grid export, W) as a time-weighted average since the previous read (state listener), and `voltage_entity` (V); optionally read `charger_power_entity`
 2. Compute `available_w = signed_export_w + charger_consumption_w - safety_margin_w`
-3. If `available_w < min_surplus_w`: press the charger stop button (sets `_stopped_by_us = True`) and arm the recovery timer
-4. Otherwise: `amps = round(available_w / (V × phases))`, clamped to `[min_current, max_current]`
+3. If `available_w < min_surplus_w`: hold `min_current`; once it stays low for `stop_delay_s`, press the charger stop button (`_stopped_by_us` set before the press, reverted if the press fails while still charging). The status listener then arms the recovery timer, which restarts once surplus ≥ `min_surplus_w + start_hysteresis_w` for `start_delay_s`. Button presses (toggle!) are retried after 5 min, max 3 attempts
+4. Otherwise closed loop on the grid meter: `amps = last_set + round((export_w − safety_margin_w) / (V × phases))`, ignored if the step is < 0.6 A (export) / < 0.3 A (import), import steps rounded up (ceil), limited to ±3 A, increases capped at `charger_power / V / 0.85 + 2 A` (anti-windup, only with `charger_power_entity`), clamped to `[min_current, max_current]`. First tick without a previous write: start from the `target_number` setpoint if `charger_power_entity` confirms the charger draws 70–115 % of it, else `round(available_w / (V × phases))`. (Open loop cannot converge when the charger draws less than its setpoint.)
 5. Skip write if `|Δamps| < min_delta_amp` (suppresses noise), except for explicit user actions
 6. Write to `target_number` entity; push state to the computed-current sensor
 
+`target_number` must be available: otherwise the tick is skipped (HA only logs a warning for a missing entity, so a write would be lost while recorded). `_last_set_current` is updated only for a real write; one tick after our own write, a differing `target_number` state (≥ 1 A) is adopted as the new base (lost write, charger-side limit, manual change). Seeding from `target_number` requires the measured draw to be 70–115 % of it.
+
 **Override mode:** When the `override` switch is ON, step 4 is skipped — `override_current` is written directly to the charger.
 
-**`_stopped_by_us` flag:** Distinguishes controller-initiated stops from external stops. Only when this is True does the controller arm a recovery timer; otherwise it stays idle.
+**`_stopped_by_us` flag:** Distinguishes controller-initiated stops from external stops. Only when this is True does the controller arm a recovery timer; otherwise it stays idle. It is persisted with `homeassistant.helpers.storage.Store` and set **before** pressing stop (the status listener may fire while the press is awaited).
+
+**Transient status:** charger status transitions to `unavailable` / `unknown` are ignored — they must never reset `_stopped_by_us` or the timers. `_last_real_status` makes `X → unavailable → X` a no-op (no reset of stop/start delays, no forced write); the startup check skips a state the listener already handled. The start/stop button is ignored when `charger_status_entity` is not configured (a toggle without status feedback is unsafe).
 
 ## Key Files
 

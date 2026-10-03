@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "ev_solar_manager"
-INTEGRATION_VERSION = "1.3.1"  # keep in sync with manifest.json
+INTEGRATION_VERSION = "1.4.0"  # keep in sync with manifest.json
 
 # --- Configuration keys ---
 CONF_TARGET_NUMBER = "target_number"
@@ -21,6 +21,9 @@ CONF_CHARGER_STATUS_ENTITY = "charger_status_entity"  # optional: charger status
 CONF_CHARGING_STATE = "charging_state"                # optional: state string that means "actively charging"
 CONF_CHARGER_START_STOP_BUTTON = "charger_start_stop_button"  # optional: toggle button entity ID
 CONF_STOPPED_STATE = "stopped_state"                  # optional: state string that means "stopped by us"
+CONF_START_HYSTERESIS_W = "start_hysteresis_w"        # optional: extra surplus required to restart vs. stop
+CONF_STOP_DELAY_S = "stop_delay_s"                    # optional: surplus must stay low this long before stop
+CONF_START_DELAY_S = "start_delay_s"                  # optional: surplus must stay high this long before restart
 
 # --- Defaults ---
 DEFAULT_MIN_CURRENT = 6        # Minimum charging current (A) – IEC 61851 minimum is 6 A
@@ -32,6 +35,9 @@ DEFAULT_PHASES = 1             # Number of AC phases used for charging (1 or 3)
 DEFAULT_SAFETY_MARGIN_W = 0.0  # No safety buffer by default
 DEFAULT_CHARGING_STATE = "Charging"  # Default charger status string that means actively charging
 DEFAULT_STOPPED_STATE = "Stopped"    # Default charger status string that means stopped/waiting
+DEFAULT_START_HYSTERESIS_W = 200.0  # Restart needs min_surplus_w + 200 W – prevents start/stop flapping
+DEFAULT_STOP_DELAY_S = 120          # Surplus must stay below threshold for 2 min before pressing stop
+DEFAULT_START_DELAY_S = 120         # Surplus must stay above restart threshold for 2 min before pressing start
 
 # --- Entity IDs created by this integration ---
 SWITCH_OVERRIDE_ENTITY = "switch.ev_solar_manager_override"
