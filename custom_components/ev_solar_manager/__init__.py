@@ -1310,11 +1310,14 @@ class EVSolarController:
         return voltage_v if voltage_v > 0 else None
 
     def _read_charger_consumption_w(self) -> float:
-        """Return the charger's current power draw in Watts, or 0.0 if unavailable."""
+        """Return the charger's current power draw in Watts, or 0.0 if unavailable.
+
+        Clamped at 0: CT meters report small negative values (e.g. -5 W) at idle.
+        """
         if not self.charger_power_entity:
             return 0.0
         value = self._read_float(self.charger_power_entity)
-        return value if value is not None else 0.0
+        return max(0.0, value) if value is not None else 0.0
 
     def _read_available_w(self) -> tuple[float, float] | None:
         """Return (available surplus W, voltage V), or None if a sensor is unavailable.

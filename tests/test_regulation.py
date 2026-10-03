@@ -515,3 +515,12 @@ async def test_seed_rejected_when_charger_draws_far_more_than_setpoint():
 
     # open loop: (450 + 2800 − 30) / 230 = 14.0
     assert last_set_value(hass) == 14.0
+
+
+@pytest.mark.asyncio
+async def test_negative_idle_charger_power_is_clamped():
+    """Shelly B reports -5 W while the charger is stopped – must not reduce available power."""
+    ctrl, hass, clock = make_regulated()
+    hass.states.set("sensor.charger_power", -5)
+
+    assert ctrl._read_charger_consumption_w() == 0.0
