@@ -84,6 +84,7 @@ See `AGENTS.md` for the full branching strategy. Key points:
 - Conventional commit prefixes: `feat:`, `fix:`, `refactor:`, `chore:`, `docs:`
 - Version bump commits use the tag format: `(v1.x.y)` in the message
 - **No co-author lines in commits** — sole author is `ZaBug`. Never add `Co-Authored-By:` trailers.
+- **English only for repository artifacts**: commit messages, PR titles and descriptions, GitHub release titles and notes, tags, code comments, log messages and docs are always written in English — even when the conversation with the user is in another language.
 
 ## HA Integration Quality Rules
 

@@ -88,6 +88,8 @@ Update `version` in **both** `manifest.json` and `INTEGRATION_VERSION` in `const
 
 ## Git Workflow
 
+**Language:** everything published to the repository is written in **English** – commit messages, PR titles/descriptions, GitHub release titles and notes, code comments, log messages and documentation. This applies even when working with the maintainer in another language.
+
 Always commit and push using the **local repository git identity**, not any global or enterprise git config. Before committing, verify the active identity:
 
 ```bash
