@@ -48,6 +48,7 @@ from datetime import timedelta
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.helpers.event import async_track_time_interval, async_track_state_change_event
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.config_entries import ConfigEntry
 
@@ -108,6 +109,15 @@ _FALLBACK_VOLTAGE_V = 230.0
 # reporting the previous state) would undo the first press. Retries are therefore slow and few.
 _PRESS_RETRY_COOLDOWN_S = 300
 _MAX_PRESS_ATTEMPTS = 3
+
+# Closed-loop regulation on the grid meter: ignore errors smaller than this (suppresses
+# 11↔12 A flapping around a rounding boundary) and limit each correction step.
+_DEADBAND_A = 0.6
+_MAX_STEP_A = 3
+
+# Persisted controller state (survives HA restarts)
+_STORAGE_VERSION = 1
+_STORAGE_KEY = f"{DOMAIN}.state"
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -262,11 +272,13 @@ class EVSolarController:
 
       charger → charging_state (e.g. "Charging")
           └─► _start_timer()  – periodic recalculation every update_interval seconds
-              └─► each tick: read solar data, calculate amps, write to charger
+              └─► each tick: average grid power over the interval, correct the last
+                  current by the remaining export (closed loop), write to charger
               └─► surplus below min_surplus_w for stop_delay_s: press stop (held at
                   min_current while waiting)
 
       charger → stopped_state (e.g. "Stopped") AND _stopped_by_us is True
+      (_stopped_by_us is persisted, so this also works after an HA restart)
           └─► _start_recovery_timer()  – checks every update_interval if solar returned
               └─► surplus ≥ min_surplus_w + start_hysteresis_w for start_delay_s:
                   press start → charger resumes → _start_timer()
@@ -342,7 +354,9 @@ class EVSolarController:
         self._unsub_timer = None
         self._unsub_recovery_timer = None
         self._unsub_status_listener = None
+        self._unsub_power_listener = None
         self._startup_task: asyncio.Task | None = None
+        self._store = Store(hass, _STORAGE_VERSION, _STORAGE_KEY)
         self._lock = asyncio.Lock()
         self._last_set_current: int | None = None
         self._override_enabled: bool = False
@@ -351,7 +365,7 @@ class EVSolarController:
         self._sensor_entity = None
         self._is_charging: bool = False   # charger is in charging_state
         self._stop_on_no_injection: bool = True   # stop charger when no solar surplus
-        self._stopped_by_us: bool = False          # True when we pressed stop due to no surplus
+        self._stopped_by_us_value: bool = False    # see _stopped_by_us property (persisted)
         self._available: bool = False
 
         # Anti-flapping / button retry bookkeeping (monotonic timestamps)
@@ -359,6 +373,27 @@ class EVSolarController:
         self._high_surplus_since: float | None = None
         self._press_attempts: int = 0
         self._last_press_at: float = float("-inf")
+
+        # Time-weighted average of power_entity between two reads (filters short load spikes)
+        self._avg_integral: float = 0.0
+        self._avg_weight_s: float = 0.0
+        self._avg_last_value: float | None = None
+        self._avg_last_ts: float | None = None
+
+    @property
+    def _stopped_by_us(self) -> bool:
+        """True when we pressed stop due to no surplus. Persisted so a restart can tell
+        our stop apart from a full car or a manual stop."""
+        return self._stopped_by_us_value
+
+    @_stopped_by_us.setter
+    def _stopped_by_us(self, value: bool) -> None:
+        if value != self._stopped_by_us_value:
+            self._stopped_by_us_value = value
+            self._store.async_delay_save(self._state_to_save, 1)
+
+    def _state_to_save(self) -> dict:
+        return {"stopped_by_us": self._stopped_by_us_value}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -375,6 +410,17 @@ class EVSolarController:
           - Start the timer unconditionally (legacy behaviour)
         """
         self._available = True
+
+        stored = await self._store.async_load()
+        if stored:
+            self._stopped_by_us_value = bool(stored.get("stopped_by_us", False))
+
+        # Feed the time-weighted grid power average
+        self._unsub_power_listener = async_track_state_change_event(
+            self.hass,
+            self.power_entity,
+            self._handle_power_change,
+        )
 
         if self.charger_status_entity:
             # Watch for charging state transitions
@@ -407,12 +453,11 @@ class EVSolarController:
 
         Three outcomes after the delay:
           1. charging_state  → start the recalculation timer immediately.
-          2. stopped_state + stop_on_no_injection + button configured
+          2. stopped_state + persisted _stopped_by_us + stop_on_no_injection + button
                              → arm the recovery timer so charging resumes
-                               automatically once solar surplus is sufficient.
-                               This handles the HA-restart-while-stopped case
-                               where _stopped_by_us was lost from memory.
-          3. Any other state (Finished, disconnected, …) → stay idle.
+                               automatically once solar surplus is sufficient
+                               (we had stopped it before the restart).
+          3. Anything else (stopped by the user, car full, disconnected, …) → stay idle.
         """
         await asyncio.sleep(10)  # give Duosida / other integrations 10s to report real state
         if not self._available:
@@ -427,27 +472,37 @@ class EVSolarController:
                 self.charging_state,
             )
             self._is_charging = True
+            self._stopped_by_us = False
             self._start_timer()
             await self._compute_and_apply("startup")
 
         elif (
             state_val == self.stopped_state
+            and self._stopped_by_us
             and self._stop_on_no_injection
             and self.charger_start_stop_button
         ):
-            # Car is connected and stopped (e.g. after HA restart while we had
-            # previously stopped it, or charger waiting for a start command).
+            # We had stopped the charger for lack of surplus before the restart.
             # Arm the recovery timer – it will press start as soon as surplus
             # is sufficient, without waiting for user intervention.
-            self._stopped_by_us = True
             self._start_recovery_timer()
             _LOGGER.info(
-                "EV Solar Manager: charger is '%s' at startup – arming recovery timer "
-                "to restart when solar surplus is sufficient",
+                "EV Solar Manager: charger is '%s' at startup and was stopped by us – arming "
+                "recovery timer to restart when solar surplus is sufficient",
+                state_val,
+            )
+
+        elif state_val in _UNAVAILABLE_STATES:
+            # Keep the persisted flag; the status listener re-arms recovery once the
+            # charger reports stopped_state again.
+            _LOGGER.info(
+                "EV Solar Manager: charger status '%s' at startup – waiting for the status listener",
                 state_val,
             )
 
         else:
+            # Stopped by the user, car full, disconnected, … – not ours to restart
+            self._stopped_by_us = False
             _LOGGER.info(
                 "EV Solar Manager: charger status '%s' – staying idle at startup",
                 state_val,
@@ -464,6 +519,9 @@ class EVSolarController:
         if self._unsub_status_listener:
             self._unsub_status_listener()
             self._unsub_status_listener = None
+        if self._unsub_power_listener:
+            self._unsub_power_listener()
+            self._unsub_power_listener = None
 
     async def async_force_recalculate(self) -> None:
         """Trigger an immediate recalculation (called by the Recalculate Now button)."""
@@ -479,6 +537,7 @@ class EVSolarController:
             self._unsub_timer = async_track_time_interval(
                 self.hass, self._handle_timer, timedelta(seconds=self.update_interval)
             )
+            self._reset_power_average()
             _LOGGER.debug("EV Solar Manager: recalculation timer started")
 
     def _stop_timer(self) -> None:
@@ -494,6 +553,7 @@ class EVSolarController:
             self._unsub_recovery_timer = async_track_time_interval(
                 self.hass, self._handle_recovery_timer, timedelta(seconds=self.update_interval)
             )
+            self._reset_power_average()
             _LOGGER.debug("EV Solar Manager: solar recovery timer started")
 
     def _stop_recovery_timer(self) -> None:
@@ -809,8 +869,8 @@ class EVSolarController:
             )
             return
 
-        # --- Read source entities ---
-        power_w = self._read_float(self.power_entity)
+        # --- Read source entities (grid power averaged over the last interval) ---
+        power_w = self._read_power_w()
         voltage_v = self._read_voltage()
         if power_w is None or voltage_v is None:
             _LOGGER.debug("EV Solar Manager: skipping calculation – power or voltage not available")
@@ -855,13 +915,37 @@ class EVSolarController:
 
         self._handle_surplus_ok()
 
-        # I = P / (U × phases)
-        amps = round(available_w / (voltage_v * self.phases))
-        amps = max(self.min_current, min(self.max_current, amps))
+        amps = self._next_current(available_w, signed_export_w, voltage_v)
 
         self._computed_current = amps
         await self._maybe_set_current(amps, reason, force)
         self._push_sensor_state()
+
+    def _next_current(self, available_w: float, signed_export_w: float, voltage_v: float) -> int:
+        """Return the next charging current (A).
+
+        Closed loop on the grid meter: correct the last written current by the remaining
+        export (or import) relative to the target export (safety_margin_w):
+
+            step = (signed_export_w − safety_margin_w) / (V × phases)
+
+        This converges even when the charger draws less than its setpoint (e.g. ~87 %),
+        which an open-loop I = available / V can never compensate. Errors below
+        _DEADBAND_A are ignored and each step is limited to ±_MAX_STEP_A.
+
+        Without a previous write (first tick after start / restart) the open-loop
+        estimate I = available_w / (V × phases) is used as the starting point.
+        """
+        w_per_amp = voltage_v * self.phases
+        if self._last_set_current is None:
+            amps = round(available_w / w_per_amp)
+        else:
+            step = (signed_export_w - self.safety_margin_w) / w_per_amp
+            if abs(step) < _DEADBAND_A:
+                amps = self._last_set_current
+            else:
+                amps = self._last_set_current + max(-_MAX_STEP_A, min(_MAX_STEP_A, round(step)))
+        return max(self.min_current, min(self.max_current, amps))
 
     async def _handle_low_surplus(self, available_w: float, min_surplus_w: float, reason: str) -> None:
         """Surplus below min_surplus_w: press stop once it stays low for stop_delay_s.
@@ -895,10 +979,12 @@ class EVSolarController:
                     )
                 self._press_attempts += 1
                 self._last_press_at = now
-                if await self._press_charger_button("no_surplus_stop"):
-                    # The status listener will see the charger enter stopped_state and
-                    # start the recovery timer.
-                    self._stopped_by_us = True
+                # Set the flag BEFORE pressing: the charger integration may refresh its status
+                # while the press is awaited, and the status listener needs the flag to arm
+                # the recovery timer when it sees stopped_state.
+                self._stopped_by_us = True
+                if not await self._press_charger_button("no_surplus_stop") and self._is_charging:
+                    self._stopped_by_us = False   # press failed and the charger did not stop
             elif self._press_attempts >= _MAX_PRESS_ATTEMPTS:
                 _LOGGER.error(
                     "EV Solar Manager: charger did not stop after %s stop presses – holding min_current",
@@ -908,6 +994,9 @@ class EVSolarController:
                 _LOGGER.debug(
                     "EV Solar Manager: stop pressed, waiting for charger to confirm – holding min_current"
                 )
+
+        if not self._is_charging:
+            return  # charger already confirmed the stop while the press was awaited
 
         # Hold min_current (fallback without button, during stop_delay_s, or while waiting for the stop)
         self._computed_current = self.min_current
@@ -1000,6 +1089,64 @@ class EVSolarController:
             )
             return None
 
+    # --- Time-weighted grid power average ---------------------------------
+    # A single sample per tick reacts to load spikes of a few seconds (kettle,
+    # compressor start). Every power_entity change is integrated over time and each
+    # read returns the average since the previous read, so a short spike only moves
+    # the result proportionally to its duration.
+
+    @staticmethod
+    def _parse_power(state) -> float | None:
+        if state is None or state.state in _UNAVAILABLE_STATES:
+            return None
+        try:
+            return float(state.state)
+        except (ValueError, TypeError):
+            return None
+
+    def _accumulate_power(self, now: float) -> None:
+        """Add the last known power value, weighted by the time it was valid."""
+        if self._avg_last_value is not None and self._avg_last_ts is not None:
+            dt = now - self._avg_last_ts
+            if dt > 0:
+                self._avg_integral += self._avg_last_value * dt
+                self._avg_weight_s += dt
+        self._avg_last_ts = now
+
+    def _reset_power_average(self) -> None:
+        """Start a new averaging window (e.g. when a timer starts after an idle period)."""
+        self._avg_integral = 0.0
+        self._avg_weight_s = 0.0
+        self._avg_last_ts = self._monotonic()
+        self._avg_last_value = self._parse_power(self.hass.states.get(self.power_entity))
+
+    @callback
+    def _handle_power_change(self, event) -> None:
+        """Integrate power_entity changes into the running average."""
+        self._accumulate_power(self._monotonic())
+        self._avg_last_value = self._parse_power(event.data.get("new_state"))
+
+    def _read_power_w(self) -> float | None:
+        """Return the average grid power since the previous read and start a new window.
+
+        Falls back to the instantaneous value when no time has been accumulated yet.
+        Returns None if the sensor is currently unavailable or non-numeric.
+        """
+        self._accumulate_power(self._monotonic())
+        current = self._read_float(self.power_entity)
+        average = self._avg_integral / self._avg_weight_s if self._avg_weight_s > 0 else None
+        self._avg_integral = 0.0
+        self._avg_weight_s = 0.0
+        self._avg_last_value = current
+        if current is None:
+            return None
+        if average is not None:
+            _LOGGER.debug(
+                "EV Solar Manager: grid power average %.1f W (instantaneous %.1f W)", average, current
+            )
+            return average
+        return current
+
     def _read_voltage(self) -> float | None:
         """Return grid voltage; None if unavailable/unknown or ≤ 0, 230 V if non-numeric."""
         state = self.hass.states.get(self.voltage_entity)
@@ -1027,7 +1174,7 @@ class EVSolarController:
 
         Used by the recovery timer to decide when to restart the charger.
         """
-        power_w = self._read_float(self.power_entity)
+        power_w = self._read_power_w()
         voltage_v = self._read_voltage()
         if power_w is None or voltage_v is None:
             return None

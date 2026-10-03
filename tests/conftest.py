@@ -31,14 +31,32 @@ class FakeServices:
     def __init__(self):
         self.calls: list[dict] = []
         self.failing: set[str] = set()   # service names that raise (e.g. {"press"})
+        self.on_call = None              # optional hook(domain, service, data) run during the call
 
     async def async_call(self, domain, service, data=None, blocking=False):
         self.calls.append({"domain": domain, "service": service, "data": data or {}})
+        if self.on_call is not None:
+            self.on_call(domain, service, data or {})
         if service in self.failing:
             raise RuntimeError(f"{domain}.{service} failed")
 
     def count(self, service: str) -> int:
         return sum(1 for c in self.calls if c["service"] == service)
+
+
+class FakeStore:
+    """Stub for homeassistant.helpers.storage.Store – keeps data in memory."""
+
+    def __init__(self, hass, version, key):
+        self.data: dict | None = None
+        self.saves: int = 0
+
+    async def async_load(self):
+        return self.data
+
+    def async_delay_save(self, data_func, delay=0):
+        self.data = data_func()
+        self.saves += 1
 
 
 class FakeHass:
@@ -84,6 +102,7 @@ def make_controller(
         "homeassistant.helpers": types.ModuleType("homeassistant.helpers"),
         "homeassistant.helpers.event": types.ModuleType("homeassistant.helpers.event"),
         "homeassistant.helpers.typing": types.ModuleType("homeassistant.helpers.typing"),
+        "homeassistant.helpers.storage": types.ModuleType("homeassistant.helpers.storage"),
         "homeassistant.helpers.discovery": types.ModuleType("homeassistant.helpers.discovery"),
         "homeassistant.helpers.device_registry": types.ModuleType("homeassistant.helpers.device_registry"),
         "homeassistant.config_entries": types.ModuleType("homeassistant.config_entries"),
@@ -100,6 +119,7 @@ def make_controller(
     ha_stubs["homeassistant.helpers.event"].async_track_time_interval = MagicMock(return_value=MagicMock())
     ha_stubs["homeassistant.helpers.event"].async_track_state_change_event = MagicMock(return_value=MagicMock())
     ha_stubs["homeassistant.helpers.typing"].ConfigType = dict
+    ha_stubs["homeassistant.helpers.storage"].Store = FakeStore
     ha_stubs["homeassistant.config_entries"].ConfigEntry = object
     ha_stubs["homeassistant.helpers.device_registry"].DeviceInfo = dict
 

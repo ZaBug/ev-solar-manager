@@ -67,12 +67,12 @@ flowchart TD
 
     OVERRIDE -- Yes --> SET_OVERRIDE[Write override_current\nto charger] --> END([Done])
 
-    OVERRIDE -- No --> READ[Read sensors:\ngrid_power_w · grid_voltage_v · charger_power_w]
+    OVERRIDE -- No --> READ[Read sensors:\ngrid_power_w averaged over the interval\n· grid_voltage_v · charger_power_w]
     READ --> CALC["available_w = signed_export_w + charger_load_w − safety_margin_w"]
 
     CALC --> THRESH{"available_w < min_surplus_w?\n(min_current × V × phases)"}
 
-    THRESH -- No: surplus OK --> CALC_A["amps = round(available_w / V × phases)\nclamp to min_current … max_current"]
+    THRESH -- No: surplus OK --> CALC_A["closed loop: amps = last_amps + round((export_w − safety_margin_w) / V × phases)\n(ignore < 0.6 A, step ≤ ±3 A; first tick: available_w / V × phases)\nclamp to min_current … max_current"]
     CALC_A --> DELTA{"Change ≥ min_delta_amp?\nor bypass reason?"}
     DELTA -- No --> SKIP([Skip — change too small])
     DELTA -- Yes --> WRITE[Write amps to target_number]
@@ -123,7 +123,9 @@ flowchart TD
     style CANCEL fill:#9E9E9E,color:#fff
 ```
 
-1. Every `update_interval` seconds the controller reads the **grid power sensor**.
+1. Every `update_interval` seconds the controller reads the **grid power sensor**, averaged
+   over the whole interval (time-weighted), so a load spike of a few seconds (kettle,
+   compressor start) does not make the current jump.
 2. It compensates for the EV charger's own consumption (which is already embedded
    in the grid meter reading) to find the true available solar budget:
    ```
@@ -131,10 +133,17 @@ flowchart TD
    ```
    - `charger_consumption_watts` comes from a real sensor (`charger_power_entity`) if
      configured, otherwise it is estimated as `last_set_amps × voltage × phases`.
-3. The target current is calculated and **clamped** between `min_current` and `max_current`:
+3. The current is corrected in a **closed loop** on the grid meter and **clamped** between
+   `min_current` and `max_current`:
    ```
-   charging_amps = round(available_watts / (grid_voltage × phases))
+   step_amps     = (grid_export_watts - safety_margin_w) / (grid_voltage × phases)
+   charging_amps = last_amps + round(step_amps)     # only if |step_amps| ≥ 0.6, max ±3 A per tick
    ```
+   The loop keeps adjusting until the export matches `safety_margin_w`, even when the
+   charger draws less than its setpoint (many chargers draw ~85–95 % of it). Errors below
+   0.6 A are ignored, which stops the current flipping between two values. On the first
+   tick after charging starts there is no previous value, so the starting point is
+   `available_watts / (grid_voltage × phases)`.
 4. The value is written to the charger entity **only** if the change is at least
    `min_delta_amp` Amperes — to avoid hammering the charger with tiny adjustments.
 5. If the available solar budget is **below the minimum viable threshold**
@@ -173,6 +182,9 @@ below 1 380 W — even if some solar is still going out — the charger is stopp
   at most 3 times in total (the button is a toggle, so faster retries could undo the press).
 - If the car is disconnected or the user stops charging manually, the recovery timer
   is cancelled automatically (only restarts when `_stopped_by_us` is `True`).
+- Whether the controller stopped the charger is stored in HA storage, so after an HA
+  restart it resumes only a charger **it** stopped — not a full car or a manual stop, even
+  when the charger reports the same state for both.
 - A transient `unavailable` / `unknown` charger status is ignored and does not reset this state.
 
 `charger_start_stop_button` requires `charger_status_entity`; without it the button is ignored.
@@ -306,7 +318,7 @@ logger:
 | `export_is_negative` | ❌ | `true` | Set to `false` if your power sensor is **positive** when exporting |
 | `phases` | ❌ | `1` | Set to `3` if your charger operates on three-phase AC |
 | `charger_power_entity` | ❌ | — | Real-time charger power sensor (W). When set, used instead of the estimated value for charger compensation. Recommended for best accuracy. |
-| `safety_margin_w` | ❌ | `0` | Watts to keep as buffer. Set to e.g. `100` to always inject ≥100 W to the grid and avoid accidental import. |
+| `safety_margin_w` | ❌ | `0` | Target grid export (W) while charging. The closed loop keeps exporting about this much (±~140 W per phase). Positive = keep a buffer to avoid import; negative = accept a small import to put more solar into the car. |
 | `charger_status_entity` | ❌ | — | Entity ID of the charger status sensor. When set, the recalculation timer runs only while the charger is in `charging_state`. |
 | `charging_state` | ❌ | `"Charging"` | State string that means the charger is actively charging. |
 | `charger_start_stop_button` | ❌ | — | Entity ID of the charger's start/stop toggle button. Enables automatic stop when no solar surplus and restart when surplus returns. Requires `charger_status_entity`. |
@@ -373,13 +385,17 @@ or be stopped (with start/stop button configured).
 
 ### The current still leaves unused solar surplus
 
-Add `charger_power_entity` pointing to a real energy monitor on the charger circuit.
-This prevents the controller from underestimating what the charger already consumes.
+The closed loop raises the current until the export matches `safety_margin_w`. If export
+stays high:
+- the charger is already at `max_current`, or the car/charger limits the current itself;
+- `min_delta_amp` is above `1` – steps smaller than it are not written;
+- `safety_margin_w` is large – it is the export target.
 
 ### The current jumps too aggressively
 
-Increase `min_delta_amp` (e.g. `2` or `3`) to reduce the frequency of changes.  
-Increase `safety_margin_w` (e.g. `200`) to add a stable buffer.
+Grid power is already averaged over `update_interval` and errors below 0.6 A are ignored.
+Increase `update_interval` to average over a longer window, or `safety_margin_w`
+(e.g. `200`) to add a stable buffer. Raising `min_delta_amp` also works, but leaves more export.
 
 ### The component fails to load at startup
 

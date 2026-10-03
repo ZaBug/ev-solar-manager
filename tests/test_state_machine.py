@@ -41,6 +41,16 @@ def use_clock(ctrl, start: float = 1000.0) -> list[float]:
     return clock
 
 
+def set_power(ctrl, hass, value: float) -> None:
+    """Change the grid power like HA does: update the state AND fire the state-change event."""
+    old = hass.states.get("sensor.grid_power")
+    hass.states.set("sensor.grid_power", value)
+    ctrl._handle_power_change(types.SimpleNamespace(data={
+        "old_state": old,
+        "new_state": FakeState(str(value)),
+    }))
+
+
 async def drain() -> None:
     """Let tasks created via hass.async_create_task run to completion."""
     for _ in range(5):
@@ -181,11 +191,11 @@ async def test_short_dip_resets_stop_delay():
     ctrl._is_charging = True
 
     await ctrl._compute_and_apply("timer")          # low, t=0
+    set_power(ctrl, hass, -3000)
     clock[0] += 60
-    hass.states.set("sensor.grid_power", -3000)
     await ctrl._compute_and_apply("timer")          # surplus back → delay reset
+    set_power(ctrl, hass, 200)
     clock[0] += 60
-    hass.states.set("sensor.grid_power", 200)
     await ctrl._compute_and_apply("timer")          # low again, new delay starts
     assert hass.services.count("press") == 0
 
@@ -223,13 +233,15 @@ async def test_first_tick_after_start_does_not_stop_with_delay():
 async def test_restart_requires_hysteresis():
     states = charging_states(-1500, "Stopped")   # 1500 W < 1380 + 200
     ctrl, hass, _ = make_controller(states, start_hysteresis_w=200)
+    clock = use_clock(ctrl)
     ctrl._stopped_by_us = True
     ctrl._unsub_recovery_timer = MagicMock()
 
     await ctrl._handle_recovery_timer(None)
     assert hass.services.count("press") == 0
 
-    hass.states.set("sensor.grid_power", -1600)   # 1600 W ≥ 1580 W
+    set_power(ctrl, hass, -1600)   # 1600 W ≥ 1580 W for the whole next interval
+    clock[0] += 60
     await ctrl._handle_recovery_timer(None)
     assert hass.services.count("press") == 1
 
@@ -243,11 +255,11 @@ async def test_restart_requires_sustained_surplus():
     ctrl._unsub_recovery_timer = MagicMock()
 
     await ctrl._handle_recovery_timer(None)          # t=0
+    set_power(ctrl, hass, -500)
     clock[0] += 60
-    hass.states.set("sensor.grid_power", -500)
     await ctrl._handle_recovery_timer(None)          # dip → reset
+    set_power(ctrl, hass, -2000)
     clock[0] += 60
-    hass.states.set("sensor.grid_power", -2000)
     await ctrl._handle_recovery_timer(None)          # high again, new delay
     clock[0] += 60
     await ctrl._handle_recovery_timer(None)          # only 60 s sustained
@@ -335,7 +347,7 @@ async def test_ineffective_stop_press_cleared_when_surplus_returns():
     await ctrl._compute_and_apply("timer")           # press stop, charger keeps charging
     assert ctrl._stopped_by_us is True
 
-    hass.states.set("sensor.grid_power", -3000)
+    set_power(ctrl, hass, -3000)
     clock[0] += 60
     await ctrl._compute_and_apply("timer")           # stop may still be in flight
     assert ctrl._stopped_by_us is True
