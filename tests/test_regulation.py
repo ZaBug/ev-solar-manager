@@ -382,3 +382,109 @@ async def test_status_update_during_stop_press_arms_recovery():
     assert ctrl._stopped_by_us is True
     assert ctrl._unsub_recovery_timer is not None, "Recovery must be armed despite the race"
     assert hass.services.count("set_value") == 0, "No current write after the charger stopped"
+
+
+# ---------------------------------------------------------------------------
+# Target number availability, lost writes and resync (live validation #4)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_no_calculation_while_target_number_missing_then_seed_next_tick():
+    """Live case 14:49: Duosida not loaded yet at charging_started → no write, no fake
+    _last_set_current; next tick the number exists and the loop seeds from it."""
+    ctrl, hass, clock = make_regulated(last_set=None)
+    hass.states._map.pop("number.charger_current")
+    hass.states.set("sensor.charger_power", 2760)    # charger still at 12 A (≈ 87 %)
+    set_power(ctrl, hass, -50)
+    clock[0] += 1
+
+    await ctrl._compute_and_apply("charging_started")
+
+    assert hass.services.calls == []
+    assert ctrl._last_set_current is None
+
+    hass.states.set("number.charger_current", 12)
+    clock[0] += 60
+    await ctrl._compute_and_apply("timer")
+
+    assert ctrl._last_set_current == 12
+
+
+@pytest.mark.asyncio
+async def test_write_not_recorded_when_target_unavailable():
+    ctrl, hass, clock = make_regulated(last_set=12)
+    hass.states.set("number.charger_current", "unavailable")
+
+    await ctrl._maybe_set_current(10, "timer", force=True)
+
+    assert hass.services.calls == []
+    assert ctrl._last_set_current == 12
+
+
+@pytest.mark.asyncio
+async def test_resync_after_lost_write():
+    """We wrote 10 A but the charger kept 12 A → next tick regulates from 12 A."""
+    ctrl, hass, clock = make_regulated(last_set=12)
+    hass.states.set("sensor.charger_power", 2400)
+    await ctrl._maybe_set_current(10, "timer", force=True)
+    hass.states.set("number.charger_current", 12)    # write did not apply
+    set_power(ctrl, hass, -30)                       # export on target → no correction
+    clock[0] += 60
+
+    await ctrl._compute_and_apply("timer")
+
+    assert ctrl._last_set_current == 12
+
+
+@pytest.mark.asyncio
+async def test_resync_to_charger_side_limit():
+    """We wrote 24 A, the charger caps at 16 A (cable) → loop continues from 16 A."""
+    ctrl, hass, clock = make_regulated(last_set=21)
+    hass.states.set("sensor.charger_power", 16 * VOLTAGE * 0.87)
+    await ctrl._maybe_set_current(24, "timer", force=True)
+    hass.states.set("number.charger_current", 16)
+    set_power(ctrl, hass, -30)
+    clock[0] += 60
+
+    await ctrl._compute_and_apply("timer")
+
+    assert ctrl._last_set_current == 16
+
+
+@pytest.mark.asyncio
+async def test_no_resync_right_after_our_write():
+    """Cloud integration may update the number a few seconds late – do not undo our write."""
+    ctrl, hass, clock = make_regulated(last_set=12)
+    hass.states.set("sensor.charger_power", 2400)
+    await ctrl._maybe_set_current(14, "timer", force=True)
+    hass.states.set("number.charger_current", 12)    # not updated yet
+    set_power(ctrl, hass, -30)
+    clock[0] += 5
+
+    await ctrl._compute_and_apply("manual_trigger")
+
+    assert ctrl._last_set_current == 14
+
+
+@pytest.mark.asyncio
+async def test_no_resync_without_own_write():
+    """Without a write of ours in this session there is nothing to resync."""
+    ctrl, hass, clock = make_regulated(last_set=12)
+    hass.states.set("number.charger_current", 20)
+    hass.states.set("sensor.charger_power", 2400)
+    set_power(ctrl, hass, -30)
+    clock[0] += 60
+
+    await ctrl._compute_and_apply("timer")
+
+    assert ctrl._last_set_current == 12
+
+
+@pytest.mark.asyncio
+async def test_seed_rejected_when_charger_draws_far_more_than_setpoint():
+    ctrl, hass = seed_case(6, 2800, -450)            # 6 A set but 2800 W drawn (≈ 200 %)
+
+    await ctrl._compute_and_apply("startup")
+
+    # open loop: (450 + 2800 − 30) / 230 = 14.0
+    assert last_set_value(hass) == 14.0

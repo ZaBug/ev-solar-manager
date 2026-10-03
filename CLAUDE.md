@@ -46,6 +46,8 @@ When `charger_status_entity` is configured, a state-change listener starts/stops
 5. Skip write if `|Δamps| < min_delta_amp` (suppresses noise), except for explicit user actions
 6. Write to `target_number` entity; push state to the computed-current sensor
 
+`target_number` must be available: otherwise the tick is skipped (HA only logs a warning for a missing entity, so a write would be lost while recorded). `_last_set_current` is updated only for a real write; one tick after our own write, a differing `target_number` state (≥ 1 A) is adopted as the new base (lost write, charger-side limit, manual change). Seeding from `target_number` requires the measured draw to be 70–115 % of it.
+
 **Override mode:** When the `override` switch is ON, step 4 is skipped — `override_current` is written directly to the charger.
 
 **`_stopped_by_us` flag:** Distinguishes controller-initiated stops from external stops. Only when this is True does the controller arm a recovery timer; otherwise it stays idle. It is persisted with `homeassistant.helpers.storage.Store` and set **before** pressing stop (the status listener may fire while the press is awaited).

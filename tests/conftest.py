@@ -28,7 +28,8 @@ class FakeStates:
 
 
 class FakeServices:
-    def __init__(self):
+    def __init__(self, states: "FakeStates | None" = None):
+        self._states = states
         self.calls: list[dict] = []
         self.failing: set[str] = set()   # service names that raise (e.g. {"press"})
         self.on_call = None              # optional hook(domain, service, data) run during the call
@@ -39,6 +40,8 @@ class FakeServices:
             self.on_call(domain, service, data or {})
         if service in self.failing:
             raise RuntimeError(f"{domain}.{service} failed")
+        if domain == "number" and service == "set_value" and self._states is not None:
+            self._states.set(data["entity_id"], data["value"])   # like HA: entity reflects the write
 
     def count(self, service: str) -> int:
         return sum(1 for c in self.calls if c["service"] == service)
@@ -62,7 +65,7 @@ class FakeStore:
 class FakeHass:
     def __init__(self, states_map: dict):
         self.states = FakeStates(states_map)
-        self.services = FakeServices()
+        self.services = FakeServices(self.states)
 
     def async_create_task(self, coro):
         return asyncio.get_running_loop().create_task(coro)
@@ -147,6 +150,7 @@ def make_controller(
     sys.modules[f"{pkg}.__init__"] = mod
     spec.loader.exec_module(mod)
 
+    states.setdefault("number.charger_current", min_current)   # target_number must exist
     hass = FakeHass(states)
     ctrl = mod.EVSolarController(
         hass=hass,

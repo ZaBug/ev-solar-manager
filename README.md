@@ -147,7 +147,11 @@ flowchart TD
    while the car limits the current itself (taper near full, battery temperature). On the first
    tick after charging starts (or after an HA restart) there is no previous value: the loop
    starts from the charger's current setpoint if `charger_power_entity` confirms the charger
-   follows it (draws ≥ 70 % of it), otherwise from `available_watts / (grid_voltage × phases)`.
+   follows it (draws 70–115 % of it), otherwise from `available_watts / (grid_voltage × phases)`.
+   If the charger's current entity (`target_number`) is not available yet (e.g. right after an
+   HA restart), nothing is written until it is. When the charger's setpoint differs from the
+   value last written (lost write, charger-side limit, manual change), the loop continues
+   from the charger's real value.
 4. The value is written to the charger entity **only** if the change is at least
    `min_delta_amp` Amperes — to avoid hammering the charger with tiny adjustments.
 5. If the available solar budget is **below the minimum viable threshold**

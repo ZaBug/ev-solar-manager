@@ -128,6 +128,7 @@ _WINDUP_HEADROOM_A = 2
 # the charger follows it – a stale/high setpoint (manual 32 A, car tapering) would
 # otherwise take minutes at -3 A/tick to come down while importing.
 _SEED_MIN_DRAW_RATIO = 0.7
+_SEED_MAX_DRAW_RATIO = 1.15   # drawing clearly more than the setpoint → setpoint is stale
 
 # Persisted controller state (survives HA restarts)
 _STORAGE_VERSION = 1
@@ -388,6 +389,7 @@ class EVSolarController:
         self._high_surplus_since: float | None = None
         self._press_attempts: int = 0
         self._last_press_at: float = float("-inf")
+        self._last_write_at: float = float("-inf")   # last number.set_value we issued
 
         # Time-weighted average of power_entity between two reads (filters short load spikes)
         self._avg_integral: float = 0.0
@@ -887,6 +889,17 @@ class EVSolarController:
     async def _compute_and_apply_locked(self, reason: str) -> None:
         force = reason in _BYPASS_DELTA
 
+        # --- Guard: the charger's current entity must exist (e.g. not yet loaded after a
+        # restart). HA only logs a warning for a missing entity, so a write would be lost
+        # while we believed it applied. Retry on the next tick instead.
+        target_value = self._read_float(self.target_number)
+        if target_value is None:
+            _LOGGER.debug(
+                "EV Solar Manager: skipping calculation (%s) – %s not available yet",
+                reason, self.target_number,
+            )
+            return
+
         # --- Override mode: bypasses all charging state and solar checks ---
         if self._override_enabled:
             target = self._override_current
@@ -915,6 +928,8 @@ class EVSolarController:
         # export_is_negative=True  → sensor is negative when exporting (bidirectional meter)
         # export_is_negative=False → sensor is positive when exporting (production sensor)
         signed_export_w = -power_w if self.export_is_negative else power_w
+
+        self._resync_from_target(target_value)
 
         # --- Compensate for EV charger load already embedded in the meter reading ---
         # grid_meter = solar - house - ev_charger  (net)
@@ -1003,11 +1018,30 @@ class EVSolarController:
 
         return max(self.min_current, min(self.max_current, amps))
 
+    def _resync_from_target(self, target_value: float) -> None:
+        """Adopt the charger's real setpoint if it differs from what we believe we wrote.
+
+        Catches lost writes, charger-side limits (e.g. cable max 16 A while we wrote 24 A)
+        and manual changes. Only after one of our own writes, and not right after it, so
+        a cloud integration that updates its state a few seconds late is not overridden.
+        """
+        if self._last_set_current is None or self._last_write_at == float("-inf"):
+            return
+        if self._monotonic() - self._last_write_at < 0.9 * self.update_interval:
+            return
+        actual = round(target_value)
+        if abs(actual - self._last_set_current) >= 1:
+            _LOGGER.info(
+                "EV Solar Manager: charger setpoint is %sA, not the %sA we wrote – regulating from %sA",
+                actual, self._last_set_current, actual,
+            )
+            self._last_set_current = actual
+
     def _confirmed_charger_setpoint(self, w_per_amp: float) -> int | None:
         """Return the charger's current setpoint (target_number) if the charger really follows it.
 
-        Confirmed when the measured draw (charger_power_entity) is at least
-        _SEED_MIN_DRAW_RATIO of setpoint × V × phases. None otherwise, or without
+        Confirmed when the measured draw (charger_power_entity) is between
+        _SEED_MIN_DRAW_RATIO and _SEED_MAX_DRAW_RATIO of setpoint × V × phases. None otherwise, or without
         charger_power_entity – the caller then falls back to the open-loop estimate.
         """
         if not self.charger_power_entity:
@@ -1015,10 +1049,14 @@ class EVSolarController:
         setpoint = self._read_float(self.target_number)
         charger_w = self._read_float(self.charger_power_entity)
         if setpoint is None or charger_w is None or setpoint <= 0:
+            _LOGGER.debug(
+                "EV Solar Manager: cannot confirm charger setpoint (setpoint=%s, charger_w=%s) – using estimate",
+                setpoint, charger_w,
+            )
             return None
         setpoint_a = round(setpoint)
         ratio = charger_w / (setpoint_a * w_per_amp)
-        if ratio < _SEED_MIN_DRAW_RATIO:
+        if not _SEED_MIN_DRAW_RATIO <= ratio <= _SEED_MAX_DRAW_RATIO:
             _LOGGER.debug(
                 "EV Solar Manager: charger setpoint %sA not confirmed (draws %.0f%%) – using estimate",
                 setpoint_a, ratio * 100,
@@ -1132,6 +1170,14 @@ class EVSolarController:
             )
             return
 
+        if self._read_float(self.target_number) is None:
+            # HA would only log a warning and do nothing – do not record a write that never happened
+            _LOGGER.warning(
+                "EV Solar Manager: cannot set %sA (reason: %s) – %s is not available",
+                amps, reason, self.target_number,
+            )
+            return
+
         _LOGGER.info("EV Solar Manager: setting charging current to %sA (reason: %s)", amps, reason)
         await self.hass.services.async_call(
             "number",
@@ -1140,6 +1186,7 @@ class EVSolarController:
             blocking=True,
         )
         self._last_set_current = amps
+        self._last_write_at = self._monotonic()
 
     async def _press_charger_button(self, reason: str) -> bool:
         """Press the charger's start/stop toggle button. Return True if the call succeeded."""
