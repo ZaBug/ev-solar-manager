@@ -145,8 +145,9 @@ flowchart TD
    import below 0.3 A (import is corrected sooner). With `charger_power_entity`, an increase
    is capped at `measured_amps / 0.85 + 2 A`, so the setpoint does not climb to `max_current`
    while the car limits the current itself (taper near full, battery temperature). On the first
-   tick after charging starts there is no previous value, so the starting point is
-   `available_watts / (grid_voltage × phases)`.
+   tick after charging starts (or after an HA restart) there is no previous value: the loop
+   starts from the charger's current setpoint if `charger_power_entity` confirms the charger
+   follows it (draws ≥ 70 % of it), otherwise from `available_watts / (grid_voltage × phases)`.
 4. The value is written to the charger entity **only** if the change is at least
    `min_delta_amp` Amperes — to avoid hammering the charger with tiny adjustments.
 5. If the available solar budget is **below the minimum viable threshold**

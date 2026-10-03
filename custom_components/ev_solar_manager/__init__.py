@@ -123,6 +123,12 @@ _MAX_STEP_A = 3
 _CHARGER_DRAW_RATIO = 0.85
 _WINDUP_HEADROOM_A = 2
 
+# First tick without a previous write (e.g. after an HA restart while charging): start the
+# closed loop from the charger's current setpoint, but only if the measured draw confirms
+# the charger follows it – a stale/high setpoint (manual 32 A, car tapering) would
+# otherwise take minutes at -3 A/tick to come down while importing.
+_SEED_MIN_DRAW_RATIO = 0.7
+
 # Persisted controller state (survives HA restarts)
 _STORAGE_VERSION = 1
 _STORAGE_KEY = f"{DOMAIN}.state"
@@ -944,6 +950,9 @@ class EVSolarController:
 
         self._handle_surplus_ok()
 
+        if self._last_set_current is None:
+            self._last_set_current = self._confirmed_charger_setpoint(voltage_v * self.phases)
+
         amps = self._next_current(available_w, signed_export_w, voltage_v)
 
         self._computed_current = amps
@@ -964,8 +973,9 @@ class EVSolarController:
         each step is limited to ±_MAX_STEP_A and increases are capped by the measured
         charger draw (anti-windup).
 
-        Without a previous write (first tick after start / restart) the open-loop
-        estimate I = available_w / (V × phases) is used as the starting point.
+        Without a previous write and without a confirmed charger setpoint (see
+        _confirmed_charger_setpoint) the open-loop estimate I = available_w / (V × phases)
+        is used as the starting point.
         """
         w_per_amp = voltage_v * self.phases
         if self._last_set_current is None:
@@ -992,6 +1002,34 @@ class EVSolarController:
                 amps = max(last, cap)
 
         return max(self.min_current, min(self.max_current, amps))
+
+    def _confirmed_charger_setpoint(self, w_per_amp: float) -> int | None:
+        """Return the charger's current setpoint (target_number) if the charger really follows it.
+
+        Confirmed when the measured draw (charger_power_entity) is at least
+        _SEED_MIN_DRAW_RATIO of setpoint × V × phases. None otherwise, or without
+        charger_power_entity – the caller then falls back to the open-loop estimate.
+        """
+        if not self.charger_power_entity:
+            return None
+        setpoint = self._read_float(self.target_number)
+        charger_w = self._read_float(self.charger_power_entity)
+        if setpoint is None or charger_w is None or setpoint <= 0:
+            return None
+        setpoint_a = round(setpoint)
+        ratio = charger_w / (setpoint_a * w_per_amp)
+        if ratio < _SEED_MIN_DRAW_RATIO:
+            _LOGGER.debug(
+                "EV Solar Manager: charger setpoint %sA not confirmed (draws %.0f%%) – using estimate",
+                setpoint_a, ratio * 100,
+            )
+            return None
+        seed = max(self.min_current, min(self.max_current, setpoint_a))
+        _LOGGER.info(
+            "EV Solar Manager: starting regulation from the charger setpoint %sA (draws %.0f%%)",
+            seed, ratio * 100,
+        )
+        return seed
 
     def _windup_cap(self, w_per_amp: float) -> int | None:
         """Highest setpoint allowed for an increase, from the measured charger draw.

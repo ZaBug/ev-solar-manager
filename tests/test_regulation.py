@@ -187,6 +187,67 @@ async def test_first_tick_without_previous_write_uses_open_loop():
     assert last_set_value(hass) == 14.0
 
 
+def seed_case(number_a, charger_w, grid_w):
+    ctrl, hass, clock = make_regulated(last_set=None)
+    hass.states.set("number.charger_current", number_a)
+    hass.states.set("sensor.charger_power", charger_w)
+    set_power(ctrl, hass, grid_w)
+    clock[0] += 60
+    return ctrl, hass
+
+
+@pytest.mark.asyncio
+async def test_restart_starts_from_confirmed_charger_setpoint():
+    """Live case: after restart the open-loop estimate gave 12 A while the charger was at 14 A
+    (draws 86 %) → ~466 W export jump. Starting from the confirmed setpoint avoids it."""
+    # Converged before the restart: 14 A set, 2800 W drawn (87 %), ~50 W export
+    ctrl, hass = seed_case(14, 2800, -50)
+
+    await ctrl._compute_and_apply("startup")
+
+    # open loop would give (50 + 2800 − 30) / 230 = 12.3 → 12 A
+    assert last_set_value(hass) == 14.0
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_high_setpoint_is_not_used():
+    """Setpoint 32 A but car draws 8 A (taper) → do not start the loop from 32 A."""
+    ctrl, hass = seed_case(32, 8 * VOLTAGE, -100)
+
+    await ctrl._compute_and_apply("startup")
+
+    # open loop: (100 + 1840 − 30) / 230 = 8.3 → 8 A
+    assert last_set_value(hass) == 8.0
+
+
+@pytest.mark.asyncio
+async def test_setpoint_not_used_when_charger_not_drawing_yet():
+    ctrl, hass = seed_case(16, 0, -2000)
+
+    await ctrl._compute_and_apply("charging_started")
+
+    # open loop: (2000 + 0 − 30) / 230 = 8.6 → 9 A
+    assert last_set_value(hass) == 9.0
+
+
+@pytest.mark.asyncio
+async def test_setpoint_not_used_without_charger_power_entity():
+    states = {
+        "sensor.grid_power": -50,
+        "sensor.grid_voltage": VOLTAGE,
+        "sensor.charger_status": "Charging",
+        "number.charger_current": 14,
+    }
+    ctrl, hass, _ = make_controller(states, safety_margin_w=30)
+    ctrl._is_charging = True
+
+    await ctrl._compute_and_apply("startup")
+
+    # Without a load measurement the setpoint cannot be confirmed (no seed from 14 A); the
+    # charger load is unknown (0 W), so 50 W export is below min_surplus → hold min_current
+    assert last_set_value(hass) == 6.0
+
+
 @pytest.mark.asyncio
 async def test_closed_loop_clamped_to_max_current():
     ctrl, hass, clock = make_regulated(last_set=23)
