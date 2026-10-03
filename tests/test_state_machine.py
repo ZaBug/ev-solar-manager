@@ -101,6 +101,55 @@ async def test_unknown_blip_while_charging_keeps_timer():
 
 
 @pytest.mark.asyncio
+async def test_blip_back_to_same_status_keeps_stop_delay_running():
+    """Charging → unavailable → Charging must not restart stop_delay_s or force a write."""
+    ctrl, hass, _ = make_controller(charging_states(200), stop_delay_s=120)
+    clock = use_clock(ctrl)
+    ctrl._handle_charger_status_change(status_event("Stopped", "Charging"))
+    await drain()
+    await ctrl._compute_and_apply("timer")          # low surplus starts the countdown
+    since = ctrl._low_surplus_since
+    writes = hass.services.count("set_value")
+    assert since is not None
+
+    clock[0] += 30
+    ctrl._handle_charger_status_change(status_event("Charging", "unavailable"))
+    ctrl._handle_charger_status_change(status_event("unavailable", "Charging"))
+    await drain()
+
+    assert ctrl._low_surplus_since == since
+    assert hass.services.count("set_value") == writes
+
+
+@pytest.mark.asyncio
+async def test_blip_to_different_status_is_a_real_transition():
+    """Charging → unavailable → Finished is handled (timers stopped)."""
+    ctrl, hass, _ = make_controller(charging_states(-3000))
+    ctrl._handle_charger_status_change(status_event("Stopped", "Charging"))
+    await drain()
+
+    ctrl._handle_charger_status_change(status_event("Charging", "unavailable"))
+    ctrl._handle_charger_status_change(status_event("unavailable", "Finished"))
+
+    assert ctrl._is_charging is False
+    assert ctrl._unsub_timer is None
+
+
+@pytest.mark.asyncio
+async def test_startup_check_skips_state_already_handled_by_listener():
+    """unavailable → Charging during the startup delay must not be followed by a second write."""
+    ctrl, hass, _ = make_controller(charging_states(-3000))
+    ctrl._handle_charger_status_change(status_event("unavailable", "Charging"))
+    await drain()
+    writes = hass.services.count("set_value")
+
+    with mock.patch("asyncio.sleep", return_value=None):
+        await ctrl._delayed_startup_check()
+
+    assert hass.services.count("set_value") == writes
+
+
+@pytest.mark.asyncio
 async def test_recovery_tick_waits_while_status_unavailable():
     """Recovery tick with unavailable status keeps waiting instead of giving up."""
     ctrl, hass, _ = make_controller(charging_states(-3000, "unavailable"))

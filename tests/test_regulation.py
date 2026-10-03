@@ -85,11 +85,11 @@ async def test_closed_loop_absorbs_export_when_charger_draws_less_than_setpoint(
 
 @pytest.mark.asyncio
 async def test_small_error_inside_deadband_keeps_current():
-    """Error of ±0.5 A must not change the setpoint (no 11↔12 A flapping)."""
+    """Export error < 0.6 A or import error < 0.3 A must not change the setpoint (no flapping)."""
     ctrl, hass, clock = make_regulated(last_set=12)
     hass.states.set("sensor.charger_power", 2400)
 
-    for export_w in (30 + 0.5 * VOLTAGE, 30 - 0.5 * VOLTAGE, 30 + 0.4 * VOLTAGE):
+    for export_w in (30 + 0.5 * VOLTAGE, 30 - 0.25 * VOLTAGE, 30 + 0.4 * VOLTAGE):
         set_power(ctrl, hass, -export_w)
         clock[0] += 60
         await ctrl._compute_and_apply("timer")
@@ -101,7 +101,7 @@ async def test_small_error_inside_deadband_keeps_current():
 @pytest.mark.asyncio
 async def test_step_is_limited_to_three_amps():
     ctrl, hass, clock = make_regulated(last_set=6)
-    hass.states.set("sensor.charger_power", 1200)
+    hass.states.set("sensor.charger_power", 2300)   # high enough that anti-windup does not bind
     set_power(ctrl, hass, -3000)          # +12.9 A worth of export
     clock[0] += 60
 
@@ -115,6 +115,58 @@ async def test_import_reduces_current():
     ctrl, hass, clock = make_regulated(last_set=14)
     hass.states.set("sensor.charger_power", 2800)
     set_power(ctrl, hass, 300)            # importing 300 W → (−300 − 30) / 230 = −1.4 A
+    clock[0] += 60
+
+    await ctrl._compute_and_apply("timer")
+
+    assert last_set_value(hass) == 13.0
+
+
+@pytest.mark.asyncio
+async def test_small_import_is_corrected_sooner_than_export():
+    """Import of 0.35 A beyond the target → −1 A; the same error as export would be ignored."""
+    ctrl, hass, clock = make_regulated(last_set=12)
+    hass.states.set("sensor.charger_power", 2400)
+    set_power(ctrl, hass, -(30 - 0.35 * VOLTAGE))   # ~50 W import
+    clock[0] += 60
+
+    await ctrl._compute_and_apply("timer")
+
+    assert last_set_value(hass) == 11.0
+
+
+@pytest.mark.asyncio
+async def test_anti_windup_when_car_limits_current():
+    """Car tapers and draws 8 A whatever is requested: setpoint must not ramp to max_current."""
+    ctrl, hass, clock = make_regulated(last_set=10)
+    hass.states.set("sensor.charger_power", 8 * VOLTAGE)
+
+    for _ in range(10):
+        set_power(ctrl, hass, -800)                 # export persists, car does not follow
+        clock[0] += 60
+        await ctrl._compute_and_apply("timer")
+
+    # cap = 8 A / 0.85 + 2 A = 11.4 → 11 A
+    assert ctrl._last_set_current == 11
+
+
+@pytest.mark.asyncio
+async def test_anti_windup_does_not_block_decrease():
+    ctrl, hass, clock = make_regulated(last_set=20)
+    hass.states.set("sensor.charger_power", 8 * VOLTAGE)
+    set_power(ctrl, hass, 200)                      # import: (−200 − 30) / 230 = −1 A
+    clock[0] += 60
+
+    await ctrl._compute_and_apply("timer")
+
+    assert last_set_value(hass) == 19.0
+
+
+@pytest.mark.asyncio
+async def test_no_anti_windup_without_charger_power_reading():
+    ctrl, hass, clock = make_regulated(last_set=10)
+    hass.states.set("sensor.charger_power", "unavailable")
+    set_power(ctrl, hass, -2000)                    # stays above min_surplus even with load = 0
     clock[0] += 60
 
     await ctrl._compute_and_apply("timer")

@@ -72,7 +72,7 @@ flowchart TD
 
     CALC --> THRESH{"available_w < min_surplus_w?\n(min_current × V × phases)"}
 
-    THRESH -- No: surplus OK --> CALC_A["closed loop: amps = last_amps + round((export_w − safety_margin_w) / V × phases)\n(ignore < 0.6 A, step ≤ ±3 A; first tick: available_w / V × phases)\nclamp to min_current … max_current"]
+    THRESH -- No: surplus OK --> CALC_A["closed loop: amps = last_amps + round((export_w − safety_margin_w) / V × phases)\n(ignore export < 0.6 A / import < 0.3 A, step ≤ ±3 A,\nincrease capped by measured charger draw; first tick: available_w / V × phases)\nclamp to min_current … max_current"]
     CALC_A --> DELTA{"Change ≥ min_delta_amp?\nor bypass reason?"}
     DELTA -- No --> SKIP([Skip — change too small])
     DELTA -- Yes --> WRITE[Write amps to target_number]
@@ -137,11 +137,14 @@ flowchart TD
    `min_current` and `max_current`:
    ```
    step_amps     = (grid_export_watts - safety_margin_w) / (grid_voltage × phases)
-   charging_amps = last_amps + round(step_amps)     # only if |step_amps| ≥ 0.6, max ±3 A per tick
+   charging_amps = last_amps + round(step_amps)     # max ±3 A per tick
    ```
    The loop keeps adjusting until the export matches `safety_margin_w`, even when the
-   charger draws less than its setpoint (many chargers draw ~85–95 % of it). Errors below
-   0.6 A are ignored, which stops the current flipping between two values. On the first
+   charger draws less than its setpoint (many chargers draw ~85–95 % of it). Small errors
+   are ignored so the current does not flip between two values: export below 0.6 A and
+   import below 0.3 A (import is corrected sooner). With `charger_power_entity`, an increase
+   is capped at `measured_amps / 0.85 + 2 A`, so the setpoint does not climb to `max_current`
+   while the car limits the current itself (taper near full, battery temperature). On the first
    tick after charging starts there is no previous value, so the starting point is
    `available_watts / (grid_voltage × phases)`.
 4. The value is written to the charger entity **only** if the change is at least
@@ -185,7 +188,9 @@ below 1 380 W — even if some solar is still going out — the charger is stopp
 - Whether the controller stopped the charger is stored in HA storage, so after an HA
   restart it resumes only a charger **it** stopped — not a full car or a manual stop, even
   when the charger reports the same state for both.
-- A transient `unavailable` / `unknown` charger status is ignored and does not reset this state.
+- A transient `unavailable` / `unknown` charger status is ignored and does not reset this state;
+  returning to the same status afterwards (e.g. `Charging → unavailable → Charging`) is not
+  treated as a new transition either.
 
 `charger_start_stop_button` requires `charger_status_entity`; without it the button is ignored.
 Without `charger_start_stop_button`, the charger falls back to staying at `min_current`
@@ -318,7 +323,7 @@ logger:
 | `export_is_negative` | ❌ | `true` | Set to `false` if your power sensor is **positive** when exporting |
 | `phases` | ❌ | `1` | Set to `3` if your charger operates on three-phase AC |
 | `charger_power_entity` | ❌ | — | Real-time charger power sensor (W). When set, used instead of the estimated value for charger compensation. Recommended for best accuracy. |
-| `safety_margin_w` | ❌ | `0` | Target grid export (W) while charging. The closed loop keeps exporting about this much (±~140 W per phase). Positive = keep a buffer to avoid import; negative = accept a small import to put more solar into the car. |
+| `safety_margin_w` | ❌ | `0` | Target grid export (W) while charging. The closed loop keeps the export around this value (about −70 W … +140 W around it, per phase at 230 V). Positive = keep a buffer to avoid import; negative = accept a small import to put more solar into the car. |
 | `charger_status_entity` | ❌ | — | Entity ID of the charger status sensor. When set, the recalculation timer runs only while the charger is in `charging_state`. |
 | `charging_state` | ❌ | `"Charging"` | State string that means the charger is actively charging. |
 | `charger_start_stop_button` | ❌ | — | Entity ID of the charger's start/stop toggle button. Enables automatic stop when no solar surplus and restart when surplus returns. Requires `charger_status_entity`. |
@@ -393,7 +398,7 @@ stays high:
 
 ### The current jumps too aggressively
 
-Grid power is already averaged over `update_interval` and errors below 0.6 A are ignored.
+Grid power is already averaged over `update_interval` and small errors are ignored.
 Increase `update_interval` to average over a longer window, or `safety_margin_w`
 (e.g. `200`) to add a stable buffer. Raising `min_delta_amp` also works, but leaves more export.
 

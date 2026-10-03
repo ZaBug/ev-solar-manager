@@ -112,8 +112,16 @@ _MAX_PRESS_ATTEMPTS = 3
 
 # Closed-loop regulation on the grid meter: ignore errors smaller than this (suppresses
 # 11↔12 A flapping around a rounding boundary) and limit each correction step.
-_DEADBAND_A = 0.6
+# Asymmetric: grid import is corrected sooner than surplus export.
+_DEADBAND_IMPORT_A = 0.3
+_DEADBAND_EXPORT_A = 0.6
 _MAX_STEP_A = 3
+
+# Anti-windup (needs charger_power_entity): when the car limits the current itself
+# (taper, battery temperature), the setpoint must not climb far above what the charger
+# really draws. Increases are capped at measured_amps / ratio + headroom.
+_CHARGER_DRAW_RATIO = 0.85
+_WINDUP_HEADROOM_A = 2
 
 # Persisted controller state (survives HA restarts)
 _STORAGE_VERSION = 1
@@ -364,6 +372,7 @@ class EVSolarController:
         self._computed_current: int = 0
         self._sensor_entity = None
         self._is_charging: bool = False   # charger is in charging_state
+        self._last_real_status: str | None = None  # last charger status that was not unavailable/unknown
         self._stop_on_no_injection: bool = True   # stop charger when no solar surplus
         self._stopped_by_us_value: bool = False    # see _stopped_by_us property (persisted)
         self._available: bool = False
@@ -466,6 +475,17 @@ class EVSolarController:
         _LOGGER.info(
             "EV Solar Manager: startup check – charger status is '%s'", state_val
         )
+        if state_val not in _UNAVAILABLE_STATES:
+            if state_val == self._last_real_status:
+                # The status listener already handled this state during the delay
+                # (e.g. unavailable → Charging while integrations were loading).
+                _LOGGER.debug(
+                    "EV Solar Manager: startup check – '%s' already handled by the status listener",
+                    state_val,
+                )
+                return
+            self._last_real_status = state_val
+
         if state_val == self.charging_state:
             _LOGGER.info(
                 "EV Solar Manager: charger is %s at startup – starting timer",
@@ -608,6 +628,15 @@ class EVSolarController:
                 "EV Solar Manager: ignoring transient charger status '%s'", new_val
             )
             return
+
+        if new_val == self._last_real_status:
+            # X → unavailable → X: nothing really changed. Re-running the transition would
+            # reset the stop/start delays and force a write on every cloud blip.
+            _LOGGER.debug(
+                "EV Solar Manager: charger status back to '%s' after a glitch – no change", new_val
+            )
+            return
+        self._last_real_status = new_val
 
         if new_val == self.charging_state:
             # Charger started charging → start recalculation timer
@@ -931,7 +960,9 @@ class EVSolarController:
 
         This converges even when the charger draws less than its setpoint (e.g. ~87 %),
         which an open-loop I = available / V can never compensate. Errors below
-        _DEADBAND_A are ignored and each step is limited to ±_MAX_STEP_A.
+        _DEADBAND_IMPORT_A (import side) / _DEADBAND_EXPORT_A (export side) are ignored,
+        each step is limited to ±_MAX_STEP_A and increases are capped by the measured
+        charger draw (anti-windup).
 
         Without a previous write (first tick after start / restart) the open-loop
         estimate I = available_w / (V × phases) is used as the starting point.
@@ -939,13 +970,41 @@ class EVSolarController:
         w_per_amp = voltage_v * self.phases
         if self._last_set_current is None:
             amps = round(available_w / w_per_amp)
+            return max(self.min_current, min(self.max_current, amps))
+
+        last = self._last_set_current
+        step = (signed_export_w - self.safety_margin_w) / w_per_amp
+        if step >= _DEADBAND_EXPORT_A:
+            delta = min(_MAX_STEP_A, round(step))
+        elif step <= -_DEADBAND_IMPORT_A:
+            delta = -min(_MAX_STEP_A, max(1, round(-step)))
         else:
-            step = (signed_export_w - self.safety_margin_w) / w_per_amp
-            if abs(step) < _DEADBAND_A:
-                amps = self._last_set_current
-            else:
-                amps = self._last_set_current + max(-_MAX_STEP_A, min(_MAX_STEP_A, round(step)))
+            delta = 0
+        amps = last + delta
+
+        if delta > 0:
+            cap = self._windup_cap(w_per_amp)
+            if cap is not None and amps > cap:
+                _LOGGER.debug(
+                    "EV Solar Manager: anti-windup – charger draws less than requested, "
+                    "limiting increase to %sA (wanted %sA)", max(last, cap), amps,
+                )
+                amps = max(last, cap)
+
         return max(self.min_current, min(self.max_current, amps))
+
+    def _windup_cap(self, w_per_amp: float) -> int | None:
+        """Highest setpoint allowed for an increase, from the measured charger draw.
+
+        None when charger_power_entity is not configured or not readable.
+        """
+        if not self.charger_power_entity:
+            return None
+        charger_w = self._read_float(self.charger_power_entity)
+        if charger_w is None:
+            return None
+        measured_a = max(0.0, charger_w) / w_per_amp
+        return round(measured_a / _CHARGER_DRAW_RATIO + _WINDUP_HEADROOM_A)
 
     async def _handle_low_surplus(self, available_w: float, min_surplus_w: float, reason: str) -> None:
         """Surplus below min_surplus_w: press stop once it stays low for stop_delay_s.
