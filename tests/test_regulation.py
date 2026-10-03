@@ -114,7 +114,34 @@ async def test_step_is_limited_to_three_amps():
 async def test_import_reduces_current():
     ctrl, hass, clock = make_regulated(last_set=14)
     hass.states.set("sensor.charger_power", 2800)
-    set_power(ctrl, hass, 300)            # importing 300 W → (−300 − 30) / 230 = −1.4 A
+    set_power(ctrl, hass, 300)            # importing 300 W → (−300 − 30) / 230 = −1.4 A → ceil −2 A
+    clock[0] += 60
+
+    await ctrl._compute_and_apply("timer")
+
+    assert last_set_value(hass) == 12.0
+
+
+@pytest.mark.asyncio
+async def test_live_import_case_cleared_in_one_step():
+    """Live 15:14:56: +315 W import at 233.4 V → step −1.48 A; round() gave −1 A, ceil gives −2 A."""
+    ctrl, hass, clock = make_regulated(last_set=12)
+    hass.states.set("sensor.grid_voltage", 233.4)
+    hass.states.set("sensor.charger_power", 2400)
+    set_power(ctrl, hass, 314.7)
+    clock[0] += 60
+
+    await ctrl._compute_and_apply("timer")
+
+    assert last_set_value(hass) == 10.0
+
+
+@pytest.mark.asyncio
+async def test_export_step_still_rounded_normally():
+    """Export of +1.4 A beyond the target → +1 A (no ceil on the export side)."""
+    ctrl, hass, clock = make_regulated(last_set=12)
+    hass.states.set("sensor.charger_power", 2400)
+    set_power(ctrl, hass, -(30 + 1.4 * VOLTAGE))
     clock[0] += 60
 
     await ctrl._compute_and_apply("timer")

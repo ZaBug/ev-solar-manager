@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from datetime import timedelta
 
@@ -985,6 +986,7 @@ class EVSolarController:
         This converges even when the charger draws less than its setpoint (e.g. ~87 %),
         which an open-loop I = available / V can never compensate. Errors below
         _DEADBAND_IMPORT_A (import side) / _DEADBAND_EXPORT_A (export side) are ignored,
+        import steps are rounded up (export steps are rounded normally),
         each step is limited to ±_MAX_STEP_A and increases are capped by the measured
         charger draw (anti-windup).
 
@@ -1002,7 +1004,8 @@ class EVSolarController:
         if step >= _DEADBAND_EXPORT_A:
             delta = min(_MAX_STEP_A, round(step))
         elif step <= -_DEADBAND_IMPORT_A:
-            delta = -min(_MAX_STEP_A, max(1, round(-step)))
+            # Import: round the deficit up (−1.48 → −2 A) so grid import is cleared in one tick
+            delta = -min(_MAX_STEP_A, math.ceil(-step))
         else:
             delta = 0
         amps = last + delta

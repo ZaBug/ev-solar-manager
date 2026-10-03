@@ -142,7 +142,7 @@ flowchart TD
    The loop keeps adjusting until the export matches `safety_margin_w`, even when the
    charger draws less than its setpoint (many chargers draw ~85–95 % of it). Small errors
    are ignored so the current does not flip between two values: export below 0.6 A and
-   import below 0.3 A (import is corrected sooner). With `charger_power_entity`, an increase
+   import below 0.3 A; an import is also rounded up (a 1.5 A deficit lowers the current by 2 A), so it is cleared within one tick. With `charger_power_entity`, an increase
    is capped at `measured_amps / 0.85 + 2 A`, so the setpoint does not climb to `max_current`
    while the car limits the current itself (taper near full, battery temperature). On the first
    tick after charging starts (or after an HA restart) there is no previous value: the loop
