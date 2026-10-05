@@ -1,12 +1,13 @@
 {
   "domain": "ev_solar_manager",
   "name": "EV Solar Manager",
-  "version": "1.4.0",
-  "documentation": "https://github.com/ZaBug/ev-solar-manager",
-  "issue_tracker": "https://github.com/ZaBug/ev-solar-manager/issues",
-  "codeowners": ["@ZaBug"],
-  "iot_class": "calculated",
-  "homeassistant": "2024.1.0",
+  "codeowners": [
+    "@ZaBug"
+  ],
   "config_flow": true,
-  "requirements": []
+  "documentation": "https://github.com/ZaBug/ev-solar-manager",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/ZaBug/ev-solar-manager/issues",
+  "requirements": [],
+  "version": "1.4.1"
 }

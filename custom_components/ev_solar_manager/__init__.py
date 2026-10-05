@@ -46,6 +46,8 @@ import math
 import time
 from datetime import timedelta
 
+import voluptuous as vol
+
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.helpers.event import async_track_time_interval, async_track_state_change_event
@@ -132,6 +134,12 @@ _SEED_MIN_DRAW_RATIO = 0.7
 _SEED_MAX_DRAW_RATIO = 1.15   # drawing clearly more than the setpoint → setpoint is stale
 
 # Persisted controller state (survives HA restarts)
+# The YAML block is passed through unchanged and stored in the config entry;
+# option validation and defaults are applied in async_setup_entry.
+CONFIG_SCHEMA = vol.Schema(
+    {DOMAIN: vol.Schema({}, extra=vol.ALLOW_EXTRA)}, extra=vol.ALLOW_EXTRA
+)
+
 _STORAGE_VERSION = 1
 _STORAGE_KEY = f"{DOMAIN}.state"
 

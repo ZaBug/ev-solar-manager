@@ -9,7 +9,7 @@ A Home Assistant custom integration (HACS-compatible) that dynamically adjusts a
 ## Commands
 
 ```bash
-# Run all tests
+# Run all tests (needs: pip install pytest pytest-asyncio voluptuous)
 python -m pytest tests/ -v
 
 # Run a single test file
@@ -19,7 +19,7 @@ python -m pytest tests/test_startup_recovery.py -v
 python -m pytest tests/test_min_surplus_threshold.py::test_name -v
 ```
 
-No build step — this is a Python package loaded directly by Home Assistant at runtime. No linting is configured; the project uses PyCharm's built-in checks only.
+No build step — this is a Python package loaded directly by Home Assistant at runtime. No linting is configured; the project uses PyCharm's built-in checks only. CI (`.github/workflows/validate.yml`) runs the HACS action (no ignores), hassfest and the tests; all three must pass before a release.
 
 ## Architecture
 
