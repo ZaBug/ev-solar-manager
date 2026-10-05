@@ -1,6 +1,12 @@
 {
   "title": "EV Solar Manager",
   "config": {
+    "step": {
+      "user": {
+        "title": "EV Solar Manager",
+        "description": "EV Solar Manager is configured in configuration.yaml; see the README."
+      }
+    },
     "abort": {
       "yaml_only": "EV Solar Manager is configured via configuration.yaml.",
       "already_configured": "EV Solar Manager is already configured."

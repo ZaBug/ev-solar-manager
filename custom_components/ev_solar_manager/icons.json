@@ -1,5 +1,4 @@
 {
-  "integration_icon": "mdi:ev-station",
   "entity": {
     "sensor": {
       "solar_charging_current": {
@@ -47,4 +46,3 @@
     }
   }
 }
-
