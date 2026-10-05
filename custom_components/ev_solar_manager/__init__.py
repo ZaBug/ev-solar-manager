@@ -469,7 +469,7 @@ class EVSolarController:
 
         if self._stop_on_no_injection and not self.charger_start_stop_button:
             _LOGGER.warning(
-                "EV Solar Manager: switch.ev_solar_manager_stop_on_no_injection is enabled "
+                "EV Solar Manager: switch.ev_solar_manager_stop_when_no_solar_surplus is enabled "
                 "but charger_start_stop_button is not configured – the switch has no effect. "
                 "Add charger_start_stop_button to your configuration to enable automatic stop/start."
             )

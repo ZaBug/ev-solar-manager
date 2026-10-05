@@ -41,7 +41,7 @@ DEFAULT_START_DELAY_S = 120         # Surplus must stay above restart threshold 
 
 # --- Entity IDs created by this integration ---
 SWITCH_OVERRIDE_ENTITY = "switch.ev_solar_manager_override"
-SWITCH_STOP_ON_NO_INJECTION_ENTITY = "switch.ev_solar_manager_stop_on_no_injection"
+SWITCH_STOP_ON_NO_INJECTION_ENTITY = "switch.ev_solar_manager_stop_when_no_solar_surplus"
 NUMBER_OVERRIDE_ENTITY = "number.ev_solar_manager_override_current"
 SENSOR_COMPUTED_ENTITY = "sensor.ev_solar_manager_computed_current"
 BUTTON_RECALC_ENTITY = "button.ev_solar_manager_recalculate_now"
