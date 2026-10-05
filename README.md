@@ -269,22 +269,44 @@ Assistant and add the integration as described above.
 
 ## Configuration
 
-EV Solar Manager is configured in the UI. The setup has four short steps:
+EV Solar Manager is configured in the UI. The setup has four short steps; the
+same steps open later via **Configure** (the screenshots show them with the
+values of a Duosida LAN setup).
 
-1. **Sensors** – grid power sensor, *Export is negative*, grid voltage sensor and
-   the charger's max-current number entity.
-2. **Charger** *(all optional)* – charger power sensor, charger status sensor and
-   start/stop button.
-3. **Charger status values** *(only with a status sensor)* – the status values
-   that mean "charging" and "stopped". For enum sensors (e.g. Duosida LAN) the
-   possible values are offered in a list; any other value can be typed in.
-4. **Regulation** – current limits, phases, export target and timing. The
-   defaults suit most installations.
+**1. Sensors** – grid power sensor, *Export is negative*, grid voltage sensor
+and the charger's max-current number entity.
 
-Every setting can be changed later via **Settings → Devices & Services →
-EV Solar Manager → Configure**. Saving reloads the integration; a stop made by
-the controller (waiting for solar surplus) is remembered across the reload.
-Only one EV Solar Manager instance can be set up.
+<img src="docs/images/options_sensors.png" alt="Step 1: sensors" width="520">
+
+**2. Charger** *(all optional)* – charger power sensor, charger status sensor
+and start/stop button. The button needs the status sensor.
+
+<img src="docs/images/options_charger.png" alt="Step 2: charger" width="520">
+
+**3. Charger status values** *(only with a status sensor)* – the status values
+that mean "charging" and "stopped". For enum sensors (e.g. Duosida LAN) the
+possible values are offered in a list; any other value can be typed in.
+
+<img src="docs/images/options_states.png" alt="Step 3: charger status values" width="520">
+
+**4. Regulation** – current limits, phases, export target and timing. The
+defaults suit most installations.
+
+<img src="docs/images/options_regulation.png" alt="Step 4: regulation" width="520">
+
+### Changing the settings
+
+Every setting can be changed later: **Settings → Devices & Services →
+EV Solar Manager**, then the gear (**Configure**). Saving reloads the
+integration; a stop made by the controller (waiting for solar surplus) is
+remembered across the reload. Only one EV Solar Manager instance can be set up.
+
+<img src="docs/images/integration.png" alt="Integration page" width="720">
+
+The device page shows the controls (override, override current, recalculate,
+stop when no solar surplus) and the computed current:
+
+<img src="docs/images/device.png" alt="Device page" width="780">
 
 `charging_state` and `stopped_state` must match the status sensor's state
 exactly (case-sensitive). Check them in **Developer Tools → States**.
