@@ -7,10 +7,10 @@ Home Assistant custom integration (HACS-compatible) that adjusts EV charger curr
 ## Architecture
 
 ```
-configuration.yaml
-       │  YAML import triggers config flow
+UI config flow / options flow          (config_flow.py, settings stored in entry.options)
+       │
        ▼
-async_setup() → async_setup_entry()   (__init__.py)
+async_setup_entry()                    (__init__.py, settings.normalize)
        │
        ▼
 EVSolarController                     (__init__.py)
@@ -28,7 +28,7 @@ All entities share a single HA device via `ev_solar_device_info()` in `device.py
 
 ## Key Design Decisions
 
-- **YAML-first config**: `configuration.yaml` triggers a config flow import (`source: "import"`). There is intentionally no UI config flow – the config flow just stores YAML data as a config entry so HA can create a proper device.
+- **UI-only config**: setup and the options flow share four steps (sensors → charger → states → tuning). All settings live in `entry.options`; saving reloads the entry (`OptionsFlowWithReload`). Single instance (`single_config_entry`). YAML is not read anymore: `async_migrate_entry` turns v1 entries (raw YAML in `entry.data`) into v2 options, and a leftover YAML block only raises a repair issue. Setup fails only for missing required entities; the other rules (`settings.validate`) are enforced by the flow.
 - **Event-driven timer**: When `charger_status_entity` is set, the recalculation timer runs *only* while the charger is in `charging_state`. Otherwise falls back to always-on timer. This avoids API noise when unplugged.
 - **Two timers**: `_unsub_timer` (active charging) and `_unsub_recovery_timer` (waiting for solar to return after stop-on-no-injection). Both are idempotent – call `_start_timer()` / `_stop_timer()` freely.
 - **`_stopped_by_us` flag**: Distinguishes our stop press from user/charger-initiated stops. Only when this is `True` does the recovery timer restart charging.
@@ -44,26 +44,26 @@ All entities share a single HA device via `ev_solar_device_info()` in `device.py
 
 | File | Role |
 |------|------|
-| `__init__.py` | `async_setup`, `async_setup_entry`, `EVSolarController` (all logic) |
+| `__init__.py` | `async_migrate_entry`, `async_setup_entry`, `EVSolarController` (all logic) |
 | `const.py` | All `CONF_*` keys, `DEFAULT_*` values, entity ID constants |
 | `device.py` | `ev_solar_device_info()` – single source of truth for DeviceInfo |
 | `sensor.py` | `EVComputedCurrentSensor` – calls `controller.register_sensor(self)` |
 | `switch.py` | Override switch + stop-on-no-injection switch |
 | `number.py` | Override current number entity |
 | `button.py` | Recalculate now button |
-| `config_flow.py` | Import-only flow; stores YAML dict as config entry data |
+| `config_flow.py` | UI config flow + options flow |
+| `settings.py` | `normalize()` / `validate()` – no HA imports, unit-tested |
 | `manifest.json` | `"requirements": []` – no PyPI deps; version must match `INTEGRATION_VERSION` in `const.py` |
 
 ## Adding New Config Options
 
 1. Add `CONF_*` and `DEFAULT_*` to `const.py`.
-2. Parse in `async_setup_entry()` in `__init__.py` and pass to `EVSolarController.__init__`.
-3. If surfaced as an entity, add the entity file and register the platform in `PLATFORMS`.
+2. Add the key to `settings.py` (`_TYPED_DEFAULTS`, or the entity tuples) and any rule to `validate()`.
+3. Add a field to the matching step schema in `config_flow.py` and its label/description to `strings.json` **and** `translations/en.json`.
+4. Read it in `async_setup_entry()` in `__init__.py` and pass it to `EVSolarController.__init__`.
+5. If surfaced as an entity, add the entity file and register the platform in `PLATFORMS`.
 
-> **Important:** `async_setup()` compares the current YAML with the stored config entry and
-> calls `async_update_entry()` + `async_reload()` if they differ. This means YAML changes
-> are picked up automatically on the next HA restart or integration reload — no need to
-> delete the config entry manually.
+Existing entries get the default automatically (`normalize()` fills missing keys).
 
 ## Adding New Entities
 
@@ -73,7 +73,7 @@ All entities share a single HA device via `ev_solar_device_info()` in `device.py
 
 ## Debugging in Home Assistant
 
-Enable verbose logging in `configuration.yaml`:
+Enable verbose logging in `configuration.yaml` (logger only – the integration itself has no YAML):
 ```yaml
 logger:
   logs:
@@ -108,7 +108,7 @@ This ensures commits are attributed to the correct personal GitHub account, not 
 
 ## Important Constraints
 
-- Requires Home Assistant **2024.1+** (`homeassistant.helpers.device_registry.DeviceInfo` API).
+- Requires Home Assistant **2025.8+** (`OptionsFlowWithReload`); keep `hacs.json` in sync.
 - All `.py` and `.json` files must be **UTF-8 without BOM** – a BOM causes silent load failures.
 - IEC 61851 mandates minimum 6 A; `DEFAULT_MIN_CURRENT = 6` must not go below this.
 

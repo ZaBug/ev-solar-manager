@@ -1,7 +1,7 @@
 # EV Solar Manager
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.1%2B-blue.svg)](https://www.home-assistant.io/)
+[![HA Version](https://img.shields.io/badge/Home%20Assistant-2025.8%2B-blue.svg)](https://www.home-assistant.io/)
 
 A Home Assistant custom integration that automatically adjusts your EV charger's
 charging current to match only the **solar surplus** exported to the grid — so you
@@ -236,12 +236,12 @@ All entities are grouped under a single **EV Solar Manager** device in HA.
 
 ## Requirements
 
-- Home Assistant **2024.1** or later
+- Home Assistant **2025.8** or later
 - An **EV charger** integration that exposes a `number` entity to set the max current
   (e.g. [Duosida LAN](https://github.com/ZaBug/duosida-lan), go-e Charger, Wallbox, OCPP, …)
 - A **grid power sensor** that reports:
   - **negative Watts** when your solar system is exporting to the grid *(most bidirectional meters)*
-  - **or positive Watts** if you use a dedicated production sensor *(set `export_is_negative: false`)*
+  - **or positive Watts** if you use a dedicated production sensor *(turn **Export is negative** off)*
 - A **grid voltage sensor** reporting AC voltage in Volts
 - *(Optional)* A **charger power sensor** (e.g. Shelly EM) for more accurate compensation
 
@@ -254,73 +254,65 @@ All entities are grouped under a single **EV Solar Manager** device in HA.
 1. Open **HACS** → ⋮ (top right) → **Custom repositories**.
 2. Add `https://github.com/ZaBug/ev-solar-manager` with type **Integration**.
 3. Search for **EV Solar Manager** in HACS, open it and press **Download**.
-4. Add the `ev_solar_manager:` block to `configuration.yaml` (see below) and
-   restart Home Assistant.
-
-There is no UI setup: the integration reads `configuration.yaml` and creates
-its device and entities automatically. Changes to the YAML block are picked
-up on the next restart.
+4. Restart Home Assistant.
+5. Go to **Settings → Devices & Services → Add integration**, search for
+   **EV Solar Manager** and follow the setup steps (see below).
 
 ### Manual
 
 Copy the whole `custom_components/ev_solar_manager` folder from the latest
 [release](https://github.com/ZaBug/ev-solar-manager/releases) into
-`config/custom_components/` of your Home Assistant installation, add the YAML
-block and restart Home Assistant.
+`config/custom_components/` of your Home Assistant installation, restart Home
+Assistant and add the integration as described above.
 
 ---
 
 ## Configuration
 
-Add the following block to your `configuration.yaml`:
+EV Solar Manager is configured in the UI. The setup has four short steps:
 
-```yaml
-ev_solar_manager:
-  # --- Required ---
-  power_entity: sensor.grid_power            # grid power sensor (W)
-  voltage_entity: sensor.grid_voltage        # grid voltage sensor (V)
-  target_number: number.my_charger_max_current  # charger max-current number entity
+1. **Sensors** – grid power sensor, *Export is negative*, grid voltage sensor and
+   the charger's max-current number entity.
+2. **Charger** *(all optional)* – charger power sensor, charger status sensor and
+   start/stop button.
+3. **Charger status values** *(only with a status sensor)* – the status values
+   that mean "charging" and "stopped". For enum sensors (e.g. Duosida LAN) the
+   possible values are offered in a list; any other value can be typed in.
+4. **Regulation** – current limits, phases, export target and timing. The
+   defaults suit most installations.
 
-  # --- Optional ---
-  min_current: 6          # minimum charging current in A (default: 6)
-  max_current: 24         # maximum charging current in A (default: 24)
-  update_interval: 60     # recalculation interval in seconds (default: 60)
-  min_delta_amp: 1        # minimum change in A before writing to charger (default: 1)
-  export_is_negative: true   # true if grid sensor is negative when exporting (default: true)
-  phases: 1               # charging phases – 1 for single-phase, 3 for three-phase (default: 1)
-  charger_power_entity: sensor.charger_power  # real charger power sensor in W (e.g. a Shelly EM channel)
-  safety_margin_w: 100    # export target in W while charging (default: 0)
-  charger_status_entity: sensor.my_charger_status   # charger status sensor
-  charging_state: "Charging"                        # status value that means charging (default "Charging")
-  charger_start_stop_button: button.my_charger_start_stop  # start/stop toggle button
-  stopped_state: "Stopped"                          # status value after a stop (default "Stopped")
-  start_hysteresis_w: 200   # extra surplus needed to restart after a stop (default: 200)
-  stop_delay_s: 120         # surplus must stay too low this long before stopping (default: 120)
-  start_delay_s: 120        # surplus must stay high enough this long before restarting (default: 120)
-```
+Every setting can be changed later via **Settings → Devices & Services →
+EV Solar Manager → Configure**. Saving reloads the integration; a stop made by
+the controller (waiting for solar surplus) is remembered across the reload.
+Only one EV Solar Manager instance can be set up.
 
 `charging_state` and `stopped_state` must match the status sensor's state
 exactly (case-sensitive). Check them in **Developer Tools → States**.
 
+### Upgrading from 1.x (YAML)
+
+Version 2.0 no longer reads `configuration.yaml`. On the first start after the
+update, the existing configuration (created from the YAML block) is migrated to
+the UI automatically, with all values preserved – entities, history and the
+controller state stay the same. Afterwards, remove the `ev_solar_manager:`
+block from `configuration.yaml`; until then Home Assistant shows a repair
+notice that the block is no longer used.
+
 ### Example: Duosida wallbox over the LAN
 
 With the [Duosida LAN](https://github.com/ZaBug/duosida-lan) integration
-(local control, no cloud) the charger part looks like this; entity ids depend
-on the device name:
+(local control, no cloud) a typical setup is (entity ids depend on the device
+name):
 
-```yaml
-ev_solar_manager:
-  power_entity: sensor.grid_power
-  voltage_entity: sensor.grid_voltage
-  target_number: number.duosida_mode3_32a_max_current
-  max_current: 32
-  charger_power_entity: sensor.charger_power
-  safety_margin_w: 30
-  charger_status_entity: sensor.duosida_mode3_32a_status
-  charging_state: "charging"
-  charger_start_stop_button: button.duosida_mode3_32a_start_stop_charging
-  stopped_state: "finishing"
-```
+| Setting | Value |
+|---------|-------|
+| Charger current setting | `number.duosida_mode3_32a_max_current` |
+| Charger power sensor | `sensor.charger_power` |
+| Charger status sensor | `sensor.duosida_mode3_32a_status` |
+| Start/stop button | `button.duosida_mode3_32a_start_stop_charging` |
+| Charging state / Stopped state | `charging` / `finishing` |
+| Maximum current | `32` A |
+| Export target | `30` W |
 
 ### Enable debug logging
 
@@ -334,6 +326,9 @@ logger:
 ---
 
 ## Configuration reference
+
+The keys are the names used in the entry options (and in the logs); the UI shows
+a label and a description for each one.
 
 | Key | Required | Default | Description |
 |-----|----------|---------|-------------|
@@ -361,8 +356,8 @@ logger:
 Go to **Developer Tools → States** and look at your power sensor while solar
 production exceeds consumption:
 
-- Value is `-1500` → sensor is negative when exporting → `export_is_negative: true` ✅
-- Value is `+1500` → sensor is positive when exporting → `export_is_negative: false`
+- Value is `-1500` → sensor is negative when exporting → *Export is negative* on ✅
+- Value is `+1500` → sensor is positive when exporting → *Export is negative* off
 
 ### Why use `charger_power_entity`?
 
@@ -407,7 +402,7 @@ entities:
 
 ### The charger is always set to `min_current`
 
-Your power sensor is probably **positive** when exporting. Add `export_is_negative: false`.
+Your power sensor is probably **positive** when exporting. Turn **Export is negative** off (Configure).
 
 Also check that your solar surplus exceeds `min_current × voltage × phases` watts (e.g. 1 380 W
 for 6 A / 230 V / 1 phase). If another heavy appliance is running, the surplus may be
@@ -432,9 +427,8 @@ Increase `update_interval` to average over a longer window, or `safety_margin_w`
 
 Check **Settings → System → Logs** for errors from `ev_solar_manager`.
 Common causes:
-- A typo in an entity ID
-- A required key missing from configuration
-- Incompatible Home Assistant version (requires 2024.1+)
+- An entity that was renamed or removed – fix it via **Configure**
+- Incompatible Home Assistant version (requires 2025.8+)
 - UTF-8 BOM in a `.py` or `.json` file (save all files as UTF-8 **without** BOM)
 
 ---
@@ -481,7 +475,7 @@ once the surplus stays below the threshold for `stop_delay_s`.
 ## Contributing
 
 Pull requests and issues are welcome. Please include relevant log lines and your
-`configuration.yaml` snippet (without secrets) when reporting a bug.
+settings (e.g. screenshots of the **Configure** steps) when reporting a bug.
 
 If you are an AI coding agent or want a quick architectural overview before contributing,
 read [`AGENTS.md`](./AGENTS.md) at the project root – it documents the architecture,

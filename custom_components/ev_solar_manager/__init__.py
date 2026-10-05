@@ -8,34 +8,9 @@ starts/stops the periodic recalculation timer based on whether the charger
 is actively charging. This avoids unnecessary API calls and log noise when
 the car is not connected or has finished charging.
 
-Minimal YAML configuration example:
-
-ev_solar_manager:
-  power_entity: sensor.principal_power      # grid power sensor (negative = exporting)
-  voltage_entity: sensor.principal_voltage  # grid voltage sensor (V)
-  target_number: number.duosida_set_maximal_current
-
-Full configuration example:
-
-ev_solar_manager:
-  power_entity: sensor.principal_power
-  voltage_entity: sensor.principal_voltage
-  target_number: number.duosida_set_maximal_current
-  min_current: 6              # minimum charging current in Amperes (default 6)
-  max_current: 24             # maximum charging current in Amperes (default 24)
-  update_interval: 60         # how often to recalculate, in seconds (default 60)
-  min_delta_amp: 1            # minimum change in Amperes before writing to charger (default 1)
-  export_is_negative: true    # true if the power sensor is negative when exporting (default true)
-  phases: 1                   # number of charging phases: 1 or 3 (default 1)
-  charger_power_entity: sensor.shellyem3_xxxx_channel_b_power  # optional: real charger power (W)
-  safety_margin_w: 100        # optional: keep this many Watts as buffer (default 0)
-  charger_status_entity: sensor.duosida_status   # optional: charger status sensor
-  charging_state: "Charging"                     # optional: state value that means charging (default "Charging")
-  charger_start_stop_button: button.duosida_start_stop_charging  # optional: toggle button (requires charger_status_entity)
-  stopped_state: "Stopped"                       # optional: state value that means stopped/waiting (default "Stopped")
-  start_hysteresis_w: 200     # optional: extra surplus needed to restart after a stop (default 200)
-  stop_delay_s: 120           # optional: surplus must stay too low this long before stopping (default 120)
-  start_delay_s: 120          # optional: surplus must stay high enough this long before restarting (default 120)
+Configuration is done in the UI (Settings → Devices & Services → Add integration
+→ EV Solar Manager); all settings can be changed later via "Configure".
+Entries created by the former YAML import (v1.x) are migrated automatically.
 """
 
 from __future__ import annotations
@@ -46,13 +21,11 @@ import math
 import time
 from datetime import timedelta
 
-import voluptuous as vol
-
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_time_interval, async_track_state_change_event
 from homeassistant.helpers.storage import Store
-from homeassistant.helpers.typing import ConfigType
 from homeassistant.config_entries import ConfigEntry
 
 from .const import (
@@ -75,19 +48,8 @@ from .const import (
     CONF_START_HYSTERESIS_W,
     CONF_STOP_DELAY_S,
     CONF_START_DELAY_S,
-    DEFAULT_MIN_CURRENT,
-    DEFAULT_MAX_CURRENT,
-    DEFAULT_UPDATE_INTERVAL,
-    DEFAULT_MIN_DELTA_AMP,
-    DEFAULT_EXPORT_IS_NEGATIVE,
-    DEFAULT_PHASES,
-    DEFAULT_SAFETY_MARGIN_W,
-    DEFAULT_CHARGING_STATE,
-    DEFAULT_STOPPED_STATE,
-    DEFAULT_START_HYSTERESIS_W,
-    DEFAULT_STOP_DELAY_S,
-    DEFAULT_START_DELAY_S,
 )
+from .settings import REQUIRED_ENTITIES, normalize
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -133,84 +95,64 @@ _WINDUP_HEADROOM_A = 2
 _SEED_MIN_DRAW_RATIO = 0.7
 _SEED_MAX_DRAW_RATIO = 1.15   # drawing clearly more than the setpoint → setpoint is stale
 
-# Persisted controller state (survives HA restarts)
-# The YAML block is passed through unchanged and stored in the config entry;
-# option validation and defaults are applied in async_setup_entry.
-CONFIG_SCHEMA = vol.Schema(
-    {DOMAIN: vol.Schema({}, extra=vol.ALLOW_EXTRA)}, extra=vol.ALLOW_EXTRA
-)
+# YAML is no longer supported: a leftover ev_solar_manager block only raises a repair issue.
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
+# Persisted controller state (survives HA restarts)
 _STORAGE_VERSION = 1
 _STORAGE_KEY = f"{DOMAIN}.state"
 
 
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Handle YAML configuration – trigger config flow import or update existing entry.
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate config entries.
 
-    Every time HA loads (or reloads) the integration, we push the current YAML
-    values into the config entry so that changes to configuration.yaml are
-    picked up without having to delete and recreate the entry.
+    v1 (YAML import): the raw YAML block was stored in entry.data.
+    v2 (UI): all settings live in entry.options so the options flow can edit them.
     """
-    if DOMAIN not in config:
-        return True
-
-    yaml_data = dict(config[DOMAIN])
-    existing_entries = hass.config_entries.async_entries(DOMAIN)
-
-    if not existing_entries:
-        # First run – create the config entry via the import flow.
-        hass.async_create_task(
-            hass.config_entries.flow.async_init(
-                DOMAIN,
-                context={"source": "import"},
-                data=yaml_data,
-            )
+    if entry.version > 2:
+        return False   # downgrade from a newer version
+    if entry.version == 1:
+        settings = normalize({**entry.data, **entry.options})
+        hass.config_entries.async_update_entry(entry, data={}, options=settings, version=2)
+        _LOGGER.info(
+            "EV Solar Manager: migrated the YAML configuration to the UI – the "
+            "ev_solar_manager block can now be removed from configuration.yaml"
         )
-    else:
-        # Entry already exists – update its data with the current YAML values
-        # so changes to configuration.yaml take effect on the next HA reload.
-        entry = existing_entries[0]
-        if entry.data != yaml_data:
-            _LOGGER.info(
-                "EV Solar Manager: configuration.yaml changed – updating config entry and reloading"
-            )
-            hass.config_entries.async_update_entry(entry, data=yaml_data)
-            hass.async_create_task(
-                hass.config_entries.async_reload(entry.entry_id)
-            )
-
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up EV Solar Manager from a config entry (created via YAML import)."""
-    cfg = dict(entry.data)
-
-    power_entity = cfg.get(CONF_POWER_ENTITY)
-    voltage_entity = cfg.get(CONF_VOLTAGE_ENTITY)
-    target_number = cfg.get(CONF_TARGET_NUMBER)
-
-    if not power_entity or not voltage_entity or not target_number:
+    """Set up EV Solar Manager from a config entry."""
+    cfg = normalize(entry.options)
+    # Only missing entities block setup; the other rules are enforced by the config flow
+    # (entries migrated from YAML keep their previous behaviour until edited).
+    missing = [key for key in REQUIRED_ENTITIES if not cfg.get(key)]
+    if missing:
         _LOGGER.error(
-            "Missing required configuration: power_entity, voltage_entity, target_number"
+            "EV Solar Manager: missing required setting(s) %s – fix them via Settings → "
+            "Devices & Services → EV Solar Manager → Configure",
+            ", ".join(missing),
         )
         return False
 
-    min_current = int(cfg.get(CONF_MIN_CURRENT, DEFAULT_MIN_CURRENT))
-    max_current = int(cfg.get(CONF_MAX_CURRENT, DEFAULT_MAX_CURRENT))
-    update_interval = int(cfg.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL))
-    min_delta_amp = int(cfg.get(CONF_MIN_DELTA_AMP, DEFAULT_MIN_DELTA_AMP))
-    export_is_negative = bool(cfg.get(CONF_EXPORT_IS_NEGATIVE, DEFAULT_EXPORT_IS_NEGATIVE))
-    phases = int(cfg.get(CONF_PHASES, DEFAULT_PHASES))
+    power_entity = cfg[CONF_POWER_ENTITY]
+    voltage_entity = cfg[CONF_VOLTAGE_ENTITY]
+    target_number = cfg[CONF_TARGET_NUMBER]
+    min_current = cfg[CONF_MIN_CURRENT]
+    max_current = cfg[CONF_MAX_CURRENT]
+    update_interval = cfg[CONF_UPDATE_INTERVAL]
+    min_delta_amp = cfg[CONF_MIN_DELTA_AMP]
+    export_is_negative = cfg[CONF_EXPORT_IS_NEGATIVE]
+    phases = cfg[CONF_PHASES]
     charger_power_entity = cfg.get(CONF_CHARGER_POWER_ENTITY)
-    safety_margin_w = float(cfg.get(CONF_SAFETY_MARGIN_W, DEFAULT_SAFETY_MARGIN_W))
+    safety_margin_w = cfg[CONF_SAFETY_MARGIN_W]
     charger_status_entity = cfg.get(CONF_CHARGER_STATUS_ENTITY)
-    charging_state = cfg.get(CONF_CHARGING_STATE, DEFAULT_CHARGING_STATE)
+    charging_state = cfg[CONF_CHARGING_STATE]
     charger_start_stop_button = cfg.get(CONF_CHARGER_START_STOP_BUTTON)
-    stopped_state = cfg.get(CONF_STOPPED_STATE, DEFAULT_STOPPED_STATE)
-    start_hysteresis_w = float(cfg.get(CONF_START_HYSTERESIS_W, DEFAULT_START_HYSTERESIS_W))
-    stop_delay_s = float(cfg.get(CONF_STOP_DELAY_S, DEFAULT_STOP_DELAY_S))
-    start_delay_s = float(cfg.get(CONF_START_DELAY_S, DEFAULT_START_DELAY_S))
+    stopped_state = cfg[CONF_STOPPED_STATE]
+    start_hysteresis_w = cfg[CONF_START_HYSTERESIS_W]
+    stop_delay_s = cfg[CONF_STOP_DELAY_S]
+    start_delay_s = cfg[CONF_START_DELAY_S]
 
     hass.data.setdefault(DOMAIN, {})
     _LOGGER.info(

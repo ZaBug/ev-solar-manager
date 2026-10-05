@@ -4,12 +4,168 @@
     "step": {
       "user": {
         "title": "EV Solar Manager",
-        "description": "EV Solar Manager is configured in configuration.yaml; see the README."
+        "description": "Sensors used to calculate the solar surplus and the entity that sets the charging current.",
+        "data": {
+          "power_entity": "Grid power sensor",
+          "export_is_negative": "Export is negative",
+          "voltage_entity": "Grid voltage sensor",
+          "target_number": "Charger current setting"
+        },
+        "data_description": {
+          "power_entity": "Net power at the grid meter in W (already includes the charger load).",
+          "export_is_negative": "On when the grid power sensor is negative while exporting solar surplus.",
+          "voltage_entity": "Grid voltage in V, used to convert watts to amperes.",
+          "target_number": "Number entity that sets the charger's maximum current (A)."
+        }
+      },
+      "charger": {
+        "title": "Charger",
+        "description": "Optional charger entities. Without a status sensor the current is recalculated continuously and automatic stop/start is disabled.",
+        "data": {
+          "charger_power_entity": "Charger power sensor",
+          "charger_status_entity": "Charger status sensor",
+          "charger_start_stop_button": "Start/stop button"
+        },
+        "data_description": {
+          "charger_power_entity": "Optional. Real charger power in W (e.g. a Shelly EM channel). Improves the start of regulation and limits the setpoint when the car draws less.",
+          "charger_status_entity": "Optional. Recalculation then runs only while charging; required for automatic stop/start.",
+          "charger_start_stop_button": "Optional. Toggle button used to stop charging when there is no surplus and to restart when it returns. Requires the status sensor."
+        }
+      },
+      "states": {
+        "title": "Charger status values",
+        "description": "Pick the status values reported by the charger status sensor, or type them. Check them in Developer Tools → States.",
+        "data": {
+          "charging_state": "Charging state",
+          "stopped_state": "Stopped state"
+        },
+        "data_description": {
+          "charging_state": "Status value while the car is charging (case-sensitive).",
+          "stopped_state": "Status value after the start/stop button stopped charging (case-sensitive)."
+        }
+      },
+      "tuning": {
+        "title": "Regulation",
+        "description": "Current limits, timing and anti-flapping parameters. The defaults suit most installations.",
+        "data": {
+          "min_current": "Minimum current",
+          "max_current": "Maximum current",
+          "phases": "Charging phases",
+          "safety_margin_w": "Export target",
+          "update_interval": "Update interval",
+          "min_delta_amp": "Minimum change",
+          "start_hysteresis_w": "Restart hysteresis",
+          "stop_delay_s": "Stop delay",
+          "start_delay_s": "Start delay"
+        },
+        "data_description": {
+          "min_current": "Lowest charging current. IEC 61851 does not allow less than 6 A.",
+          "max_current": "Highest charging current the controller may set.",
+          "phases": "Number of phases the car charges on.",
+          "safety_margin_w": "Power kept as grid export while charging (safety margin).",
+          "update_interval": "How often the charging current is recalculated.",
+          "min_delta_amp": "Smaller changes are not written to the charger (noise suppression).",
+          "start_hysteresis_w": "Extra surplus, above the minimum-current power, needed to restart after a stop.",
+          "stop_delay_s": "The surplus must stay too low this long before charging is stopped.",
+          "start_delay_s": "The surplus must stay high enough this long before charging is restarted."
+        }
       }
     },
+    "error": {
+      "button_needs_status": "The start/stop button is a toggle: it needs the charger status sensor to know whether a press starts or stops charging.",
+      "max_below_min": "The maximum current must not be lower than the minimum current.",
+      "min_current_too_low": "IEC 61851 does not allow less than 6 A.",
+      "invalid_phases": "Choose 1 or 3 phases."
+    },
     "abort": {
-      "yaml_only": "EV Solar Manager is configured via configuration.yaml.",
-      "already_configured": "EV Solar Manager is already configured."
+      "already_configured": "EV Solar Manager is already configured.",
+      "single_instance_allowed": "EV Solar Manager is already configured. Use Configure to change its settings."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "EV Solar Manager options",
+        "description": "Sensors used to calculate the solar surplus and the entity that sets the charging current.",
+        "data": {
+          "power_entity": "Grid power sensor",
+          "export_is_negative": "Export is negative",
+          "voltage_entity": "Grid voltage sensor",
+          "target_number": "Charger current setting"
+        },
+        "data_description": {
+          "power_entity": "Net power at the grid meter in W (already includes the charger load).",
+          "export_is_negative": "On when the grid power sensor is negative while exporting solar surplus.",
+          "voltage_entity": "Grid voltage in V, used to convert watts to amperes.",
+          "target_number": "Number entity that sets the charger's maximum current (A)."
+        }
+      },
+      "charger": {
+        "title": "Charger",
+        "description": "Optional charger entities. Without a status sensor the current is recalculated continuously and automatic stop/start is disabled.",
+        "data": {
+          "charger_power_entity": "Charger power sensor",
+          "charger_status_entity": "Charger status sensor",
+          "charger_start_stop_button": "Start/stop button"
+        },
+        "data_description": {
+          "charger_power_entity": "Optional. Real charger power in W (e.g. a Shelly EM channel). Improves the start of regulation and limits the setpoint when the car draws less.",
+          "charger_status_entity": "Optional. Recalculation then runs only while charging; required for automatic stop/start.",
+          "charger_start_stop_button": "Optional. Toggle button used to stop charging when there is no surplus and to restart when it returns. Requires the status sensor."
+        }
+      },
+      "states": {
+        "title": "Charger status values",
+        "description": "Pick the status values reported by the charger status sensor, or type them. Check them in Developer Tools → States.",
+        "data": {
+          "charging_state": "Charging state",
+          "stopped_state": "Stopped state"
+        },
+        "data_description": {
+          "charging_state": "Status value while the car is charging (case-sensitive).",
+          "stopped_state": "Status value after the start/stop button stopped charging (case-sensitive)."
+        }
+      },
+      "tuning": {
+        "title": "Regulation",
+        "description": "Current limits, timing and anti-flapping parameters. The defaults suit most installations.",
+        "data": {
+          "min_current": "Minimum current",
+          "max_current": "Maximum current",
+          "phases": "Charging phases",
+          "safety_margin_w": "Export target",
+          "update_interval": "Update interval",
+          "min_delta_amp": "Minimum change",
+          "start_hysteresis_w": "Restart hysteresis",
+          "stop_delay_s": "Stop delay",
+          "start_delay_s": "Start delay"
+        },
+        "data_description": {
+          "min_current": "Lowest charging current. IEC 61851 does not allow less than 6 A.",
+          "max_current": "Highest charging current the controller may set.",
+          "phases": "Number of phases the car charges on.",
+          "safety_margin_w": "Power kept as grid export while charging (safety margin).",
+          "update_interval": "How often the charging current is recalculated.",
+          "min_delta_amp": "Smaller changes are not written to the charger (noise suppression).",
+          "start_hysteresis_w": "Extra surplus, above the minimum-current power, needed to restart after a stop.",
+          "stop_delay_s": "The surplus must stay too low this long before charging is stopped.",
+          "start_delay_s": "The surplus must stay high enough this long before charging is restarted."
+        }
+      }
+    },
+    "error": {
+      "button_needs_status": "The start/stop button is a toggle: it needs the charger status sensor to know whether a press starts or stops charging.",
+      "max_below_min": "The maximum current must not be lower than the minimum current.",
+      "min_current_too_low": "IEC 61851 does not allow less than 6 A.",
+      "invalid_phases": "Choose 1 or 3 phases."
+    }
+  },
+  "selector": {
+    "phases": {
+      "options": {
+        "1": "Single-phase",
+        "3": "Three-phase"
+      }
     }
   }
 }

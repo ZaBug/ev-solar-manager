@@ -26,9 +26,10 @@ No build step — this is a Python package loaded directly by Home Assistant at 
 The integration is a single Home Assistant config entry backed by one controller class. All logic lives in `custom_components/ev_solar_manager/`.
 
 **Entry point flow:**
-1. `async_setup()` / `async_setup_entry()` in `__init__.py` — validates YAML config and creates the `EVSolarController`
-2. `EVSolarController` (`__init__.py:212`) — the central state machine; owns all timers and state
-3. Platform modules (`sensor.py`, `switch.py`, `number.py`, `button.py`) — thin HA entity wrappers that call back into the controller
+1. `config_flow.py` — UI setup + options flow (steps: sensors → charger → states → tuning); all settings are stored in `entry.options`
+2. `async_setup_entry()` in `__init__.py` — normalizes `entry.options` (`settings.normalize`) and creates the `EVSolarController`; `async_migrate_entry()` moves v1 (YAML import) `entry.data` into options
+3. `EVSolarController` (`__init__.py`) — the central state machine; owns all timers and state
+4. Platform modules (`sensor.py`, `switch.py`, `number.py`, `button.py`) — thin HA entity wrappers that call back into the controller
 
 **Controller state machine (`__init__.py`):**
 
@@ -60,7 +61,8 @@ When `charger_status_entity` is configured, a state-change listener starts/stops
 |---|---|
 | `__init__.py` | Controller, setup, and all calculation logic |
 | `const.py` | All `CONF_*` keys and `DEFAULT_*` values — the single source of truth for config schema |
-| `config_flow.py` | YAML import flow — no UI config, just imports from `configuration.yaml` |
+| `config_flow.py` | UI config flow + options flow (`OptionsFlowWithReload`); single instance |
+| `settings.py` | `normalize()` / `validate()` for settings — no HA imports, shared by setup, flow and migration |
 | `sensor.py` | Exposes computed current as a push-based sensor entity |
 | `switch.py` | Override and stop-on-no-injection switch entities |
 | `number.py` | Override current number entity |
@@ -72,7 +74,8 @@ When `charger_status_entity` is configured, a state-change listener starts/stops
 - **Version sync**: When bumping the version, update **both** `manifest.json` and `const.py::INTEGRATION_VERSION`.
 - **IEC 61851 minimum**: Charging current cannot go below 6 A. `DEFAULT_MIN_CURRENT` must remain 6.
 - **No external dependencies**: `manifest.json::requirements` must remain empty — only Home Assistant APIs are allowed.
-- **HA 2024.1+**: Required for the `DeviceInfo` API shape used in `device.py`.
+- **HA 2025.8+**: Required for `OptionsFlowWithReload` (keep `hacs.json` in sync).
+- **No YAML**: configuration is UI-only (`CONFIG_SCHEMA = cv.config_entry_only_config_schema`). New settings need a `CONF_*`/`DEFAULT_*` in `const.py`, an entry in `settings._TYPED_DEFAULTS` (or the entity tuples), a field in a `config_flow.py` step schema and labels in `strings.json` + `translations/en.json`.
 - **UTF-8 without BOM**: All `.py` and `.json` files must be UTF-8 without BOM or the integration silently fails to load.
 - **Grid meter formula**: `available = export + charger_consumption - safety_margin`. The grid meter reads net power (already including charger load), so charger consumption must be added back before computing solar surplus.
 

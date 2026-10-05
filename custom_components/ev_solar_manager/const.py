@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 DOMAIN = "ev_solar_manager"
-INTEGRATION_VERSION = "1.4.1"  # keep in sync with manifest.json
+INTEGRATION_VERSION = "2.0.0"  # keep in sync with manifest.json
 
-# --- Configuration keys ---
+# --- Configuration keys (stored in the config entry options) ---
 CONF_TARGET_NUMBER = "target_number"
 CONF_POWER_ENTITY = "power_entity"
 CONF_VOLTAGE_ENTITY = "voltage_entity"
@@ -26,6 +26,7 @@ CONF_STOP_DELAY_S = "stop_delay_s"                    # optional: surplus must s
 CONF_START_DELAY_S = "start_delay_s"                  # optional: surplus must stay high this long before restart
 
 # --- Defaults ---
+IEC_MIN_CURRENT = 6            # IEC 61851: no charging below 6 A
 DEFAULT_MIN_CURRENT = 6        # Minimum charging current (A) – IEC 61851 minimum is 6 A
 DEFAULT_MAX_CURRENT = 24       # Maximum charging current (A)
 DEFAULT_UPDATE_INTERVAL = 60   # Recalculation interval (seconds)

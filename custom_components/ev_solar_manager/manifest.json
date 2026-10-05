@@ -9,5 +9,6 @@
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/ZaBug/ev-solar-manager/issues",
   "requirements": [],
-  "version": "1.4.1"
+  "single_config_entry": true,
+  "version": "2.0.0"
 }
