@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Home Assistant custom integration (HACS-compatible) that adjusts EV charger current to match solar export surplus. No build system, no tests, no CI – development means editing Python files and reloading them in a live HA instance.
+Home Assistant custom integration (HACS-compatible) that adjusts EV charger current to match solar export surplus. No build system. Tests in `tests/` run without Home Assistant (`pip install pytest pytest-asyncio voluptuous`, then `python -m pytest -q tests`); CI (`.github/workflows/validate.yml`) runs the HACS action, hassfest and the tests on every push.
 
 ## Architecture
 
