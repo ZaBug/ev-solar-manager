@@ -21,9 +21,10 @@ you need full-speed charging regardless of solar production.
 ├─────────────────┤                       │  available = export + charger_load   │
 │  Grid Voltage   │ ──────────────────►   │            - safety_margin           │
 │  sensor (V)     │                       │                                      │
-├─────────────────┤                       │  I = available / (U × phases)        │
-│  Charger Power  │ ──────────────────►   │  clamp(min_current, I, max_current)  │
-│  sensor (W) opt │                       │                                      │
+├─────────────────┤                       │  I = last_I + (export − margin)      │
+│  Charger Power  │ ──────────────────►   │            / (U × phases)            │
+│  sensor (W) opt │                       │  closed loop, clamp(min, max_current)│
+│                 │                       │                                      │
 └─────────────────┘                       └──────────────┬───────────────────────┘
                                                          │ number.set_value
                                           ┌──────────────▼───────────────────────┐
@@ -163,7 +164,7 @@ flowchart TD
 
 When `charger_start_stop_button` is configured, the integration can automatically
 **stop the charger** when the solar surplus is insufficient and **restart it** once
-enough surplus returns. This is controlled by `switch.ev_solar_manager_stop_on_no_injection`
+enough surplus returns. This is controlled by `switch.ev_solar_manager_stop_when_no_solar_surplus`
 (enabled by default).
 
 The stop threshold is based on the **minimum viable charging current** (IEC 61851 ≥ 6 A):
@@ -225,7 +226,7 @@ testing and debugging.
 |--------|------|-------------|
 | `sensor.ev_solar_manager_computed_current` | Sensor (A) | Last current calculated from solar data |
 | `switch.ev_solar_manager_override` | Switch | Enable / disable manual override |
-| `switch.ev_solar_manager_stop_on_no_injection` | Switch | Stop charger automatically when no solar surplus (requires `charger_start_stop_button`) |
+| `switch.ev_solar_manager_stop_when_no_solar_surplus` | Switch | Stop charger automatically when no solar surplus (requires `charger_start_stop_button`) |
 | `number.ev_solar_manager_override_current` | Number (A) | Manual current for override mode |
 | `button.ev_solar_manager_recalculate_now` | Button | Trigger an immediate recalculation |
 
@@ -237,7 +238,7 @@ All entities are grouped under a single **EV Solar Manager** device in HA.
 
 - Home Assistant **2024.1** or later
 - An **EV charger** integration that exposes a `number` entity to set the max current
-  (e.g. [Duosida](https://github.com/example/duosida), go-e Charger, Wallbox, …)
+  (e.g. [Duosida LAN](https://github.com/ZaBug/duosida-lan), go-e Charger, Wallbox, OCPP, …)
 - A **grid power sensor** that reports:
   - **negative Watts** when your solar system is exporting to the grid *(most bidirectional meters)*
   - **or positive Watts** if you use a dedicated production sensor *(set `export_is_negative: false`)*
@@ -250,27 +251,22 @@ All entities are grouped under a single **EV Solar Manager** device in HA.
 
 ### Via HACS (recommended)
 
-1. Open **HACS → Integrations → ⋮ → Custom repositories**
-2. Add this repository URL and select category **Integration**
-3. Search for **EV Solar Manager** and install it
-4. Restart Home Assistant
+1. Open **HACS** → ⋮ (top right) → **Custom repositories**.
+2. Add `https://github.com/ZaBug/ev-solar-manager` with type **Integration**.
+3. Search for **EV Solar Manager** in HACS, open it and press **Download**.
+4. Add the `ev_solar_manager:` block to `configuration.yaml` (see below) and
+   restart Home Assistant.
+
+There is no UI setup: the integration reads `configuration.yaml` and creates
+its device and entities automatically. Changes to the YAML block are picked
+up on the next restart.
 
 ### Manual
 
-1. Copy the `custom_components/ev_solar_manager` folder to your HA config directory:
-   ```
-   config/
-   └── custom_components/
-       └── ev_solar_manager/
-           ├── __init__.py
-           ├── button.py
-           ├── const.py
-           ├── manifest.json
-           ├── number.py
-           ├── sensor.py
-           └── switch.py
-   ```
-2. Restart Home Assistant
+Copy the whole `custom_components/ev_solar_manager` folder from the latest
+[release](https://github.com/ZaBug/ev-solar-manager/releases) into
+`config/custom_components/` of your Home Assistant installation, add the YAML
+block and restart Home Assistant.
 
 ---
 
@@ -281,9 +277,9 @@ Add the following block to your `configuration.yaml`:
 ```yaml
 ev_solar_manager:
   # --- Required ---
-  power_entity: sensor.principal_power          # grid power sensor entity ID
-  voltage_entity: sensor.principal_voltage      # grid voltage sensor entity ID
-  target_number: number.duosida_set_maximal_current  # charger current number entity ID
+  power_entity: sensor.grid_power            # grid power sensor (W)
+  voltage_entity: sensor.grid_voltage        # grid voltage sensor (V)
+  target_number: number.my_charger_max_current  # charger max-current number entity
 
   # --- Optional ---
   min_current: 6          # minimum charging current in A (default: 6)
@@ -292,15 +288,38 @@ ev_solar_manager:
   min_delta_amp: 1        # minimum change in A before writing to charger (default: 1)
   export_is_negative: true   # true if grid sensor is negative when exporting (default: true)
   phases: 1               # charging phases – 1 for single-phase, 3 for three-phase (default: 1)
-  charger_power_entity: sensor.shellyem3_xxxx_channel_b_power  # real charger power sensor (W)
-  safety_margin_w: 100    # keep this many Watts as buffer to avoid grid import (default: 0)
-  charger_status_entity: sensor.duosida_status   # optional: charger status sensor
-  charging_state: "Charging"                     # optional: state value that means charging (default "Charging")
-  charger_start_stop_button: button.duosida_start_stop_charging  # optional: toggle button
-  stopped_state: "Stopped"                       # optional: state value that means stopped/waiting (default "Stopped")
+  charger_power_entity: sensor.charger_power  # real charger power sensor in W (e.g. a Shelly EM channel)
+  safety_margin_w: 100    # export target in W while charging (default: 0)
+  charger_status_entity: sensor.my_charger_status   # charger status sensor
+  charging_state: "Charging"                        # status value that means charging (default "Charging")
+  charger_start_stop_button: button.my_charger_start_stop  # start/stop toggle button
+  stopped_state: "Stopped"                          # status value after a stop (default "Stopped")
   start_hysteresis_w: 200   # extra surplus needed to restart after a stop (default: 200)
   stop_delay_s: 120         # surplus must stay too low this long before stopping (default: 120)
   start_delay_s: 120        # surplus must stay high enough this long before restarting (default: 120)
+```
+
+`charging_state` and `stopped_state` must match the status sensor's state
+exactly (case-sensitive). Check them in **Developer Tools → States**.
+
+### Example: Duosida wallbox over the LAN
+
+With the [Duosida LAN](https://github.com/ZaBug/duosida-lan) integration
+(local control, no cloud) the charger part looks like this; entity ids depend
+on the device name:
+
+```yaml
+ev_solar_manager:
+  power_entity: sensor.grid_power
+  voltage_entity: sensor.grid_voltage
+  target_number: number.duosida_mode3_32a_max_current
+  max_current: 32
+  charger_power_entity: sensor.charger_power
+  safety_margin_w: 30
+  charger_status_entity: sensor.duosida_mode3_32a_status
+  charging_state: "charging"
+  charger_start_stop_button: button.duosida_mode3_32a_start_stop_charging
+  stopped_state: "finishing"
 ```
 
 ### Enable debug logging
@@ -364,6 +383,8 @@ icon: mdi:solar-power
 entities:
   - entity: sensor.ev_solar_manager_computed_current
     name: Computed current
+  - entity: switch.ev_solar_manager_stop_when_no_solar_surplus
+    name: Stop when no solar surplus
   - entity: switch.ev_solar_manager_override
     name: Manual override
   - entity: number.ev_solar_manager_override_current
@@ -418,24 +439,42 @@ Common causes:
 
 ---
 
-## Example automation: stop charging at night
+## Example automation: finish charging from the grid after sunset
+
+Solar-only charging stops when the surplus is gone. This automation switches to
+override at 6 A after sunset, so the car keeps charging slowly from the grid,
+and back to solar mode in the morning:
 
 ```yaml
 automation:
-  - alias: "Stop EV charging after sunset"
-    trigger:
-      - platform: sun
+  - alias: "EV: charge at 6 A from the grid after sunset"
+    triggers:
+      - trigger: sun
         event: sunset
-    action:
-      - service: switch.turn_on
-        target:
-          entity_id: switch.ev_solar_manager_override
-      - service: number.set_value
+    actions:
+      - action: number.set_value
         target:
           entity_id: number.ev_solar_manager_override_current
         data:
           value: 6
+      - action: switch.turn_on
+        target:
+          entity_id: switch.ev_solar_manager_override
+
+  - alias: "EV: back to solar charging at sunrise"
+    triggers:
+      - trigger: sun
+        event: sunrise
+    actions:
+      - action: switch.turn_off
+        target:
+          entity_id: switch.ev_solar_manager_override
 ```
+
+To stop charging at night instead, leave override off: with
+`charger_start_stop_button` configured and
+`switch.ev_solar_manager_stop_when_no_solar_surplus` on, the charger is stopped
+once the surplus stays below the threshold for `stop_delay_s`.
 
 ---
 
@@ -452,5 +491,5 @@ file map, design decisions, and conventions specific to this codebase.
 
 ## License
 
-MIT
+[MIT](LICENSE)
 
