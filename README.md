@@ -1,6 +1,6 @@
 # EV Solar Manager
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
+[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2025.8%2B-blue.svg)](https://www.home-assistant.io/)
 
 A Home Assistant custom integration that automatically adjusts your EV charger's
@@ -251,12 +251,21 @@ All entities are grouped under a single **EV Solar Manager** device in HA.
 
 ### Via HACS (recommended)
 
-1. Open **HACS** → ⋮ (top right) → **Custom repositories**.
-2. Add `https://github.com/ZaBug/ev-solar-manager` with type **Integration**.
-3. Search for **EV Solar Manager** in HACS, open it and press **Download**.
-4. Restart Home Assistant.
-5. Go to **Settings → Devices & Services → Add integration**, search for
-   **EV Solar Manager** and follow the setup steps (see below).
+EV Solar Manager is available in the HACS default store.
+
+[![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ZaBug&repository=ev-solar-manager&category=integration)
+
+1. Open **HACS**, search for **EV Solar Manager**, open it and press
+   **Download** (or use the button above).
+2. Restart Home Assistant.
+3. Go to **Settings → Devices & Services → Add integration**, search for
+   **EV Solar Manager** and follow the setup steps (see below), or use this
+   button:
+
+   [![Open your Home Assistant instance and start setting up EV Solar Manager.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=ev_solar_manager)
+
+> Installed it earlier as a custom repository? Nothing to do — updates keep
+> coming. You may remove the entry from HACS → ⋮ → **Custom repositories**.
 
 ### Manual
 
